@@ -1,0 +1,97 @@
+# Custom PyTorch Pipeline Configuration
+# For Automotive Parts Anomaly Detection
+
+# Dataset Configuration
+dataset:
+  root_dir: "dataset"
+  train_dir: "train"
+  val_dir: "val"
+  test_dir: "test"
+  input_size: 224
+  batch_size: 8
+  num_workers: 4
+  
+# Class Configuration
+classes:
+  names: [] # Use classes.txt (cat, dog)
+  num_classes: 2
+  class_weights: [1.0, 1.0]  # Weight NG class higher for imbalance
+
+# Model Configuration
+model:
+  name: "convnextv2_large"
+  pretrained: true
+  use_coordconv: false
+  drop_path_rate: 0.1
+  in_chans: 3
+
+# Training Configuration
+training:
+  epochs: 10
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+  warmup_epochs: 5
+  min_lr: 1e-6
+  
+  # Preprocessing Features
+  use_fda: false
+  use_hist_norm: true
+  use_bg_masking: true
+  
+  augmentation:
+    horizontal_flip: 0.1
+    vertical_flip: 0.0
+    rotation: 0.1
+    brightness: 0.1
+    # contrast: 0.2
+    # saturation: 0.2
+    # hue: 0.1
+    # gaussian_blur: 0.1
+    # gaussian_noise: 0.1
+  
+  
+  # Training Options
+  freeze_backbone: false
+  use_amp: true
+  gradient_clip: 1.0
+  
+# Inference Configuration
+inference:
+  threshold: 0.5
+  device: "cuda"
+  sliding_window:
+    patch_size: 224
+    overlap: 0.5
+    aggregation: "max"
+  
+# Paths Configuration
+paths:
+  tao_weights: "../pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
+  output_dir: "outputs"
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  visualization_dir: "visualizations"
+
+# Logging Configuration
+logging:
+  log_interval: 10
+  save_interval: 5
+  eval_interval: 1
+  use_tensorboard: true
+
+# FDA Parameters
+fda:
+  beta_range: [0.1, 0.4]
+  reference_dir: 'dataset/test/dog/dog.4001.jpg'
+  
+# Hardware Configuration
+hardware:
+  device: "cuda"
+  mixed_precision: true
+  compile_model: false
+  
+# Export Configuration
+export:
+  onnx_opset: 11
+  dynamic_axes: true
+  do_constant_folding: true
