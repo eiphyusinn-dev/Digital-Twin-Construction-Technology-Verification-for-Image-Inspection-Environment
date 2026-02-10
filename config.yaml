@@ -35,14 +35,14 @@ training:
   
   # Preprocessing Features
   use_fda: False
-  use_hist_norm: true
-  use_bg_masking: true
+  use_hist_norm: False
+  use_bg_masking: False
   
   augmentation:
-    horizontal_flip: 0.1
-    vertical_flip: 0.0
-    rotation: 0.1
-    brightness: 0.1
+    horizontal_flip: 0.5
+    vertical_flip: 0.8
+    rotation: 1.0
+    brightness: 0.5
     # contrast: 0.2
     # saturation: 0.2
     # hue: 0.1

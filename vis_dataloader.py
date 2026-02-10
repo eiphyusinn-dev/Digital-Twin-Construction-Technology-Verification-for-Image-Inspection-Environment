@@ -83,27 +83,67 @@ class DataLoaderVisualizer:
                 history.append(('+ BG Mask', current_img.copy()))
 
             # --- PART 2: TRAINING AUGMENTATIONS (One-by-One) ---
-            
+            def apply_and_log(img, transform, label):
+                result = transform(image=img)['image']
+                # Check if the pixels actually changed
+                if not np.array_equal(img, result):
+                    history.append((label, result.copy()))
+                    return result
+                return img
+
             if aug_cfg.get('horizontal_flip', 0) > 0:
-                current_img = A.HorizontalFlip(p=aug_cfg['horizontal_flip'])(image=current_img)['image']
-                history.append(('+ H-Flip', current_img.copy()))
+                current_img = apply_and_log(
+                    current_img, 
+                    A.HorizontalFlip(p=aug_cfg['horizontal_flip']), 
+                    '+ H-Flip'
+                )
 
             if aug_cfg.get('rotation', 0) > 0:
-                current_img = A.Rotate(limit=15, p=aug_cfg['rotation'])(image=current_img)['image']
-                history.append(('+ Rotate', current_img.copy()))
+                current_img = apply_and_log(
+                    current_img, 
+                    A.Rotate(limit=50, p=aug_cfg['rotation']), 
+                    '+ Rotate'
+                )
 
             if aug_cfg.get('brightness', 0) > 0:
-                current_img = A.RandomBrightnessContrast(
-                    brightness_limit=aug_cfg['brightness'], 
-                    contrast_limit=aug_cfg.get('contrast', 0), 
-                    p=aug_cfg['brightness']
-                )(image=current_img)['image']
-                history.append(('+ Bright', current_img.copy()))
+                current_img = apply_and_log(
+                    current_img,
+                    A.RandomBrightnessContrast(
+                        brightness_limit=aug_cfg['brightness'], 
+                        contrast_limit=aug_cfg.get('contrast', 0), 
+                        p=aug_cfg['brightness']
+                    ),
+                    '+ Bright'
+                )
 
             if aug_cfg.get('gaussian_blur', 0) > 0:
-                current_img = A.GaussianBlur(blur_limit=(3, 7), p=aug_cfg['gaussian_blur'])(image=current_img)['image']
-                history.append(('+ Blur', current_img.copy()))
-
+                current_img = apply_and_log(
+                    current_img,
+                    A.GaussianBlur(blur_limit=(3, 7), p=aug_cfg['gaussian_blur']),
+                    '+ Blur'
+                )
+            if aug_cfg.get('gaussian_noise', 0) > 0:
+                current_img = apply_and_log(
+                    current_img,
+                    A.GaussNoise(var_limit=(10.0, 50.0), p=aug_cfg['gaussian_noise']),
+                    '+ Noise'
+                )
+            if aug_cfg.get('vertical_flip', 0) > 0:
+                current_img = apply_and_log(
+                    current_img, 
+                    A.VerticalFlip(p=aug_cfg['vertical_flip']), 
+                    '+ V-Flip'
+                )
+            if aug_cfg.get('saturation', 0) > 0 or aug_cfg.get('hue', 0) > 0:
+                current_img = apply_and_log(
+                    current_img,
+                    A.HueSaturationValue(
+                        hue_shift_limit=int(aug_cfg.get('hue', 0.1) * 180),
+                        sat_shift_limit=int(aug_cfg.get('saturation', 0.2) * 255),
+                        p=max(aug_cfg.get('saturation', 0.2), aug_cfg.get('hue', 0.1))
+                    ),
+                    '+ Hue/Sat'
+                )
             # --- FINAL PLOTTING ---
             num_steps = len(history)
             fig, axes = plt.subplots(1, num_steps, figsize=(4 * num_steps, 5))

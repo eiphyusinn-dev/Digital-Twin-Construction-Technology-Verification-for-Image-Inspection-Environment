@@ -59,21 +59,8 @@ Edit `config.yaml` to match your setup:
 - Adjust training parameters
 - Configure TAO weights path
 
-### 4. Run Training
 
-```bash
-python3 train.py
-```
-
-### 5. Monitor Training
-
-```bash
-# View TensorBoard logs
-tensorboard --logdir=logs/
-# Open http://localhost:6006
-```
-
-### 6. Visualize Data Loading
+### 4. Visualize Data Loading
 
 ```bash
 # Visualize data loading and augmentation pipeline
@@ -85,6 +72,21 @@ python3 vis_dataloader.py --n 10
 # - Check preprocessing steps
 # - Validate class name mapping
 ```
+
+### 5. Run Training
+
+```bash
+python3 train.py
+```
+
+### 6. Monitor Training
+
+```bash
+# View TensorBoard logs
+tensorboard --logdir=logs/
+# Open http://localhost:6006
+```
+
 
 ### 7. Run Inference
 
