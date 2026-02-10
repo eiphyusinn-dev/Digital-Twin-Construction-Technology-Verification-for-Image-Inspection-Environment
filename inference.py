@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Inference Pipeline for ConvNeXt-V2 Model
+Simplified Inference Pipeline for ConvNeXt-V2 Model (Direct Classification)
 """
 
 import torch
@@ -17,12 +17,10 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 import time
 from tqdm import tqdm
-import logging
 
 # Import custom modules
 from model import create_model, ConvNeXtV2
-from dataset import create_validation_transforms, ClientCustomDataset
-
+from dataset import create_validation_transforms
 
 class InferenceEngine:
     """
@@ -59,30 +57,24 @@ class InferenceEngine:
         }
         self.transform = create_validation_transforms(temp_config)
         
-        # Class names logic: Config -> classes.txt -> Fallback
+        # Class names logic
         self.class_names = self._prepare_class_names(model_config.get('class_names', []))
         
         print(f"Inference engine initialized on {self.device}")
         print(f"Model loaded with classes: {self.class_names}")
     
     def _prepare_class_names(self, class_names_from_cfg: Optional[List[str]]) -> List[str]:
-        # 1. Use config names if provided
         if class_names_from_cfg and len(class_names_from_cfg) > 0:
             return class_names_from_cfg
             
-        # 2. Try to read from classes.txt in dataset root
         classes_txt = Path("dataset/classes.txt")
         if classes_txt.exists():
             with open(classes_txt, 'r') as f:
-                # Assuming classes.txt can be space-separated or line-separated
                 content = f.read().strip()
                 names = content.split() if ' ' in content else content.splitlines()
                 names = [n.strip() for n in names if n.strip()]
-                if names: 
-                    print(f"Loaded classes from {classes_txt}: {names}")
-                    return names
+                if names: return names
         
-        # 3. Fallback
         return ['cat', 'dog']
     
     def _load_model(self, model_path: str) -> ConvNeXtV2:
@@ -138,12 +130,10 @@ class InferenceEngine:
     
     def create_classification_image(self, image: Union[str, np.ndarray], prediction: Dict) -> str:
         img = cv2.imread(image) if isinstance(image, str) else image.copy()
-        
         pred_class = prediction['predicted_class']
         confidence = prediction['confidence']
         idx = prediction['class_index']
         
-        # Color mapping: Cycle through a set of colors for different classes
         colors = [(0, 255, 0), (0, 0, 255), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
         color = colors[idx % len(colors)]
         
@@ -155,60 +145,22 @@ class InferenceEngine:
         
         annotated_dir = "annotated_images"
         os.makedirs(annotated_dir, exist_ok=True)
-        fname = f"annotated_{os.path.basename(image)}" if isinstance(image, str) else "annotated_patch.jpg"
+        fname = f"annotated_{os.path.basename(image)}" if isinstance(image, str) else "annotated_img.jpg"
         save_path = os.path.join(annotated_dir, fname)
         cv2.imwrite(save_path, img)
         return save_path
-
-    def sliding_window_inference(self, image: Union[str, np.ndarray], patch_size: int = 224, 
-                               overlap: float = 0.5, aggregation_method: str = 'max') -> Dict:
-        if isinstance(image, str):
-            img = cv2.imread(image)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        else:
-            img = image.copy()
-        
-        h, w = img.shape[:2]
-        stride = int(patch_size * (1 - overlap))
-        patch_predictions = []
-        
-        for y in range(0, h - patch_size + 1, stride):
-            for x in range(0, w - patch_size + 1, stride):
-                patch = img[y:y+patch_size, x:x+patch_size]
-                patch_predictions.append(self.predict_single(patch))
-        
-        if aggregation_method == 'max':
-            # Aggregates by the highest confidence across any class
-            best_patch = max(patch_predictions, key=lambda x: x['confidence'])
-            final_result = best_patch.copy()
-        else:
-            # Average probabilities
-            avg_probs = {c: np.mean([p['class_probabilities'][c] for p in patch_predictions]) for c in self.class_names}
-            max_class = max(avg_probs, key=avg_probs.get)
-            final_result = {
-                'predicted_class': max_class,
-                'confidence': avg_probs[max_class],
-                'class_probabilities': avg_probs
-            }
-        
-        final_result['num_patches'] = len(patch_predictions)
-        return final_result
 
     def predict_batch(self, image_paths: List[str]) -> List[Dict]:
         return [self.predict_single(p) for p in tqdm(image_paths, desc="Processing batch")]
 
 def main():
     parser = argparse.ArgumentParser(description='ConvNeXt-V2 Inference')
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--config', type=str, default='config.yaml')
-    parser.add_argument('--input', type=str, required=True)
-    parser.add_argument('--output', type=str)
-    parser.add_argument('--threshold', type=float)
-    parser.add_argument('--device', type=str)
-    parser.add_argument('--sliding-window', action='store_true')
-    parser.add_argument('--patch-size', type=int, default=224)
-    parser.add_argument('--overlap', type=float, default=0.5)
-    parser.add_argument('--aggregation', type=str, default='max', choices=['max', 'avg'])
+    parser.add_argument('--model-path', type=str, required=True, help='Path to trained model checkpoint (.pth file)')
+    parser.add_argument('--config', type=str, default='config.yaml', help='Path to configuration file')
+    parser.add_argument('--input', type=str, required=True, help='Path to input image or directory for batch processing')
+    parser.add_argument('--output', type=str, help='Path to save inference results (JSON file)')
+    parser.add_argument('--threshold', type=float, help='Classification threshold (overrides config)')
+    parser.add_argument('--device', type=str, help='Device to run inference on (cuda/cpu)')
     
     args = parser.parse_args()
     
@@ -235,7 +187,7 @@ def main():
     )
     
     if os.path.isfile(args.input):
-        results = [engine.sliding_window_inference(args.input, args.patch_size, args.overlap, args.aggregation)] if args.sliding_window else [engine.predict_single(args.input)]
+        results = [engine.predict_single(args.input)]
     else:
         paths = [str(p) for p in Path(args.input).glob('**/*') if p.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']]
         results = engine.predict_batch(paths)
@@ -243,7 +195,6 @@ def main():
     if args.output:
         with open(args.output, 'w') as f: json.dump(results, f, indent=2)
 
-    # Print Distribution Summary
     valid = [r for r in results if 'predicted_class' in r]
     counts = {c: sum(1 for r in valid if r['predicted_class'] == c) for c in engine.class_names}
     print("\nInference Summary:")

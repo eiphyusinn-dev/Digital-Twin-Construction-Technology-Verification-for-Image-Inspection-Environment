@@ -34,7 +34,7 @@ training:
   min_lr: 1e-6
   
   # Preprocessing Features
-  use_fda: false
+  use_fda: False
   use_hist_norm: true
   use_bg_masking: true
   
