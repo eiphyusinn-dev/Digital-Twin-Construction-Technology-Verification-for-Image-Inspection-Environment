@@ -90,11 +90,49 @@ class Trainer:
         return nn.CrossEntropyLoss()
     
     def _create_scheduler(self) -> Optional[optim.lr_scheduler._LRScheduler]:
-        # Implementation of Cosine Annealing as a default high-performance choice
-        return optim.lr_scheduler.CosineAnnealingLR(
+        # Implementation of Cosine Annealing with warmup
+        train_cfg = self.config['training']
+        
+        # Create cosine annealing scheduler with warmup
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, 
-            T_max=self.config['training']['epochs']
+            T_max=train_cfg['epochs'],
+            eta_min=train_cfg.get('min_lr', 0.0)
         )
+        
+        # Apply warmup if specified
+        if train_cfg.get('warmup_epochs', 0) > 0:
+            from torch.optim.lr_scheduler import _LRScheduler
+            
+            class WarmupCosineAnnealingLR(_LRScheduler):
+                def __init__(self, optimizer, T_max, eta_min, warmup_epochs):
+                    self.optimizer = optimizer
+                    self.T_max = T_max
+                    self.eta_min = eta_min
+                    self.warmup_epochs = warmup_epochs
+                    self.base_lrs = [group['lr'] for group in optimizer.param_groups]
+                    self.step_count = 0
+                    
+                def get_lr(self):
+                    if self.step_count < self.warmup_epochs:
+                        # Linear warmup
+                        return self.base_lrs[0] * (self.step_count + 1) / self.warmup_epochs
+                    else:
+                        # Cosine annealing
+                        return scheduler.get_lr()
+                
+                def step(self):
+                    self.step_count += 1
+                    return self.optimizer.step()
+                
+                def get_last_lr(self):
+                    return [self.get_lr()]
+            
+            return WarmupCosineAnnealingLR(self.optimizer, train_cfg['epochs'], 
+                                       train_cfg.get('min_lr', 0.0), 
+                                       train_cfg['warmup_epochs'])
+        
+        return scheduler
     
     def _setup_logging(self):
         log_dir = self.config['paths']['log_dir']
@@ -175,17 +213,33 @@ class Trainer:
 
     def train(self):
         epochs = self.config['training']['epochs']
+        eval_interval = self.config['logging'].get('eval_interval', 1)
+        
         for epoch in range(epochs):
             self.current_epoch = epoch
             train_m = self.train_epoch()
-            val_m = self.validate()
-            if self.scheduler: self.scheduler.step()
             
-            self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f}")
-            
-            if val_m['accuracy'] > self.best_val_acc:
-                self.best_val_acc = val_m['accuracy']
-                torch.save(self.model.state_dict(), os.path.join(self.config['paths']['checkpoint_dir'], 'best_model.pth'))
+            # Validate only at specified intervals
+            if (epoch + 1) % eval_interval == 0:
+                val_m = self.validate()
+                if self.scheduler: self.scheduler.step()
+                
+                self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f}")
+                
+                # Save checkpoint at intervals
+                save_interval = self.config['logging'].get('save_interval', 5)
+                if (epoch + 1) % save_interval == 0:
+                    checkpoint_path = os.path.join(self.config['paths']['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+                    torch.save(self.model.state_dict(), checkpoint_path)
+                    self.logger.info(f"Checkpoint saved: {checkpoint_path}")
+                
+                # Save best model
+                if val_m['accuracy'] > self.best_val_acc:
+                    self.best_val_acc = val_m['accuracy']
+                    torch.save(self.model.state_dict(), os.path.join(self.config['paths']['checkpoint_dir'], 'best_model.pth'))
+            else:
+                # Still log training progress even without validation
+                self.logger.info(f"Epoch {epoch+1} | Training only (eval_interval: {eval_interval})")
         
         # Close TensorBoard writer
         if self.writer:
@@ -206,8 +260,7 @@ def main():
         model_name=config['model']['name'],
         num_classes=config['classes']['num_classes'],
         in_chans=config['model']['in_chans'],
-        drop_path_rate=config['model']['drop_path_rate'],
-        use_coordconv=config['model']['use_coordconv']
+        drop_path_rate=config['model']['drop_path_rate']
     )
 
     tao_path = config['paths']['tao_weights']

@@ -1,5 +1,4 @@
 # Custom PyTorch Pipeline Configuration
-# For Automotive Parts Anomaly Detection
 
 # Dataset Configuration
 dataset:
@@ -21,7 +20,6 @@ classes:
 model:
   name: "convnextv2_large"
   pretrained: True
-  use_coordconv: false
   drop_path_rate: 0.1
   in_chans: 3
 
@@ -74,8 +72,7 @@ paths:
 logging:
   log_interval: 10
   save_interval: 5
-  eval_interval: 1
-  use_tensorboard: true
+  eval_interval: 2
 
 # FDA Parameters
 fda:
@@ -87,9 +84,3 @@ hardware:
   device: "cuda"
   mixed_precision: true
   compile_model: false
-  
-# Export Configuration
-export:
-  onnx_opset: 11
-  dynamic_axes: true
-  do_constant_folding: true

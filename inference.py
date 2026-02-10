@@ -82,8 +82,7 @@ class InferenceEngine:
             model_name=self.model_config.get('model_name', 'convnextv2_large'),
             num_classes=self.model_config.get('num_classes', 2),
             in_chans=self.model_config.get('in_chans', 3),
-            drop_path_rate=self.model_config.get('drop_path_rate', 0.1),
-            use_coordconv=self.model_config.get('use_coordconv', False)
+            drop_path_rate=self.model_config.get('drop_path_rate', 0.1)
         )
         checkpoint = torch.load(model_path, map_location='cpu')
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
@@ -173,7 +172,6 @@ def main():
         'in_chans': config['model']['in_chans'],
         'input_size': config['dataset']['input_size'],
         'drop_path_rate': config['model']['drop_path_rate'],
-        'use_coordconv': config['model']['use_coordconv'],
         'use_hist_norm': config['training']['use_hist_norm'],
         'use_bg_masking': config['training']['use_bg_masking'],
         'class_names': config['classes'].get('names', [])
