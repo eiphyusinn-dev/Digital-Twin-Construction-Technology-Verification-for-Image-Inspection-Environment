@@ -51,7 +51,7 @@ class Trainer:
         
         # Mixed precision training from hardware/training config
         use_amp = config['training'].get('use_amp', False) or config['hardware'].get('mixed_precision', False)
-        self.scaler = GradScaler('cuda') if use_amp else None
+        self.scaler = GradScaler() if use_amp else None
         
         # Setup TensorBoard writer
         if TENSORBOARD_AVAILABLE:
@@ -70,7 +70,7 @@ class Trainer:
         
         # Setup logging
         self._setup_logging()
-        os.makedirs(config['paths']['output_dir'], exist_ok=True)
+        # os.makedirs(config['paths']['output_dir'], exist_ok=True)
         os.makedirs(config['paths']['checkpoint_dir'], exist_ok=True)
     
     def _create_optimizer(self) -> optim.Optimizer:
@@ -211,17 +211,18 @@ def main():
     )
 
     tao_path = config['paths']['tao_weights']
-    if os.path.exists(tao_path):
-        print(f"Loading TAO weights from {tao_path}")
-        tao_dict = torch.load(tao_path, map_location='cpu')
-        # Access the actual state_dict from TAO checkpoint
-        if 'state_dict' in tao_dict:
-            tao_weights = tao_dict['state_dict']
-        else:
-            tao_weights = tao_dict
-        loaded, missing = model.load_tao_weights(tao_weights)
-        print(f"Loaded {loaded} weights from TAO checkpoint")
-        print(f"Missing keys: {missing}")
+    if config['model']['pretrained']:
+        if os.path.exists(tao_path):
+            print(f"Loading TAO weights from {tao_path}")
+            tao_dict = torch.load(tao_path, map_location='cpu')
+            # Access the actual state_dict from TAO checkpoint
+            if 'state_dict' in tao_dict:
+                tao_weights = tao_dict['state_dict']
+            else:
+                tao_weights = tao_dict
+            loaded, missing = model.load_tao_weights(tao_weights)
+            print(f"Loaded {loaded} weights from TAO checkpoint")
+            print(f"Missing keys: {missing}")
     
     if config['training'].get('freeze_backbone'):
         for name, param in model.named_parameters():

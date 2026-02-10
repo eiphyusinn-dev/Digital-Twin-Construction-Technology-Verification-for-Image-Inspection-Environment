@@ -105,7 +105,10 @@ def create_training_transforms(config: Dict) -> A.Compose:
 
     # Always Resize first
     transforms_list.append(A.Resize(input_size, input_size))
-
+    
+    # Apply Normalization BEFORE augmentations to keep data in valid range
+    transforms_list.append(A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+    
     # Check Horizontal Flip
     if aug_cfg.get('horizontal_flip', 0) > 0:
         transforms_list.append(A.HorizontalFlip(p=aug_cfg['horizontal_flip']))
@@ -144,7 +147,6 @@ def create_training_transforms(config: Dict) -> A.Compose:
 
     # --- 3. Final Required Steps ---
     transforms_list.extend([
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2()
     ])
     

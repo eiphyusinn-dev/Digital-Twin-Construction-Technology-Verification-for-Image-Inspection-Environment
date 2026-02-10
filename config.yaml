@@ -20,7 +20,7 @@ classes:
 # Model Configuration
 model:
   name: "convnextv2_large"
-  pretrained: true
+  pretrained: True
   use_coordconv: false
   drop_path_rate: 0.1
   in_chans: 3
@@ -37,7 +37,9 @@ training:
   use_fda: False
   use_hist_norm: False
   use_bg_masking: False
-  
+
+
+  # Augmentations 
   augmentation:
     horizontal_flip: 0.5
     vertical_flip: 0.8
@@ -51,7 +53,7 @@ training:
   
   
   # Training Options
-  freeze_backbone: false
+  freeze_backbone: True
   use_amp: true
   gradient_clip: 1.0
   
@@ -59,10 +61,6 @@ training:
 inference:
   threshold: 0.5
   device: "cuda"
-  sliding_window:
-    patch_size: 224
-    overlap: 0.5
-    aggregation: "max"
   
 # Paths Configuration
 paths:
