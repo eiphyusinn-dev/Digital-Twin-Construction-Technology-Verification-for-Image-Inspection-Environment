@@ -14,7 +14,7 @@ dataset:
 classes:
   names: [] # Use classes.txt (cat, dog)
   num_classes: 2
-  class_weights: [1.0, 1.0]  # Weight NG class higher for imbalance
+  class_weights: [1.0, 1.0]  # Weighted loss for imbalance
 
 # Model Configuration
 model:
@@ -83,4 +83,3 @@ fda:
 hardware:
   device: "cuda"
   mixed_precision: true
-  compile_model: false
