@@ -116,15 +116,14 @@ python3 inference.py --model-path checkpoints/best_model.pth --input path/to/ima
 ```
 ├── config.yaml              # Main configuration file
 ├── train.py                 # Training script
-├── inference.py              # Inference script
-├── model.py                 # Model definitions
-├── model_standard.py         # Standard ConvNeXt-V2 for TAO weights
+├── inference.py             # Inference script
+├── model.py                 # Standard ConvNeXt-V2 for TAO weights
 ├── dataset.py               # Dataset and data loading
 ├── utils/                   # Utility functions
-│   ├── preprocessing.py       # Data transforms
+│   ├── preprocessing.py     # Data transforms
 │   └── fda_utils.py         # FDA implementation
 ├── checkpoints/             # Model checkpoints
-├── logs/                   # Training logs
-├── annotated_images/         # Inference results
-└── dataset/                # Training data
+├── logs/                    # Training logs
+├── annotated_images/        # Inference results
+└── dataset/                 # Training data
 ```
