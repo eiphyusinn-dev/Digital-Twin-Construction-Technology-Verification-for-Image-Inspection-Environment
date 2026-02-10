@@ -73,7 +73,20 @@ tensorboard --logdir=logs/
 # Open http://localhost:6006
 ```
 
-### 6. Run Inference
+### 6. Visualize Data Loading
+
+```bash
+# Visualize data loading and augmentation pipeline
+python3 vis_dataloader.py --n 10
+
+# This script helps you:
+# - Verify data loading works correctly
+# - Check augmentation effects
+# - Check preprocessing steps
+# - Validate class name mapping
+```
+
+### 7. Run Inference
 
 ```bash
 # Single image inference
