@@ -84,7 +84,11 @@ def create_training_transforms(config: Dict) -> A.Compose:
     """
     transforms_list = []
     
-    # --- 1. Preprocessing (Conditional on training flags) ---
+    # --- 1. ALWAYS Resize First ---
+    input_size = config['dataset'].get('input_size', 224)
+    transforms_list.append(A.Resize(input_size, input_size))
+    
+    # --- 2. Preprocessing (Conditional on training flags) ---
     train_cfg = config.get('training', {})
     fda_cfg = config.get('fda', {})
     
@@ -99,12 +103,8 @@ def create_training_transforms(config: Dict) -> A.Compose:
     if train_cfg.get('use_bg_masking'):
         transforms_list.append(BackgroundMasking(p=1.0))
     
-    # --- 2. Geometric & Color Augmentations---
+    # --- 3. Geometric & Color Augmentations---
     aug_cfg = config['training'].get('augmentation', {})
-    input_size = config['dataset'].get('input_size', 224)
-
-    # Always Resize first
-    transforms_list.append(A.Resize(input_size, input_size))
     
     # Check Horizontal Flip
     if aug_cfg.get('horizontal_flip', 0) > 0:
@@ -140,7 +140,37 @@ def create_training_transforms(config: Dict) -> A.Compose:
 
     # Check Gaussian Noise
     if aug_cfg.get('gaussian_noise', 0) > 0:
-        transforms_list.append(A.GaussNoise(var_limit=(10.0, 50.0), p=aug_cfg['gaussian_noise']))
+        transforms_list.append(A.GaussNoise(var_range=(10.0, 50.0), p=aug_cfg['gaussian_noise']))
+    
+    # Advanced Augmentations
+    # Color Jitter
+    if aug_cfg.get('color_jitter', {}).get('enabled', False):
+        color_cfg = aug_cfg['color_jitter']
+        transforms_list.append(A.ColorJitter(
+            brightness=color_cfg.get('brightness', 0.2),
+            contrast=color_cfg.get('contrast', 0.2),
+            saturation=color_cfg.get('saturation', 0.2),
+            hue=color_cfg.get('hue', 0.1),
+            p=1.0
+        ))
+    
+    # RandAugment (using A.SomeOf for dynamic per-image selection)
+    if aug_cfg.get('randaugment', {}).get('enabled', False):
+        rand_cfg = aug_cfg['randaugment']
+        n = rand_cfg.get('n', 2)
+        m = rand_cfg.get('m', 9)
+        
+        # Create a list of augmentations to choose from (applied dynamically per image)
+        augmentations = [
+            A.RandomBrightnessContrast(brightness_limit=min(0.15, m/20.0), contrast_limit=min(0.15, m/20.0), p=1.0),
+            A.RandomGamma(gamma_limit=(max(70, 100-m*1), min(130, 100+m*1)), p=1.0),
+            A.GaussianBlur(blur_limit=(1, max(2, m//5)), p=1.0),
+            A.GaussNoise(std_range=(0.03, 0.03+m*0.01), p=1.0),
+            A.RandomRotate90(p=1.0),
+        ]
+        
+        # Use A.SomeOf to randomly select n augmentations per image dynamically
+        transforms_list.append(A.SomeOf(augmentations, n=n, p=1.0))
     
     # Apply Normalization AFTER augmentations
     transforms_list.append(A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))

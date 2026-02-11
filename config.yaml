@@ -32,22 +32,42 @@ training:
   min_lr: 1e-6
   
   # Preprocessing Features
-  use_fda: False
-  use_hist_norm: False
-  use_bg_masking: False
+  use_fda: false
+  use_hist_norm: false
+  use_bg_masking: false
 
 
   # Augmentations 
   augmentation:
-    horizontal_flip: 0.5
-    vertical_flip: 0.8
-    rotation: 1.0
-    brightness: 0.5
-    # contrast: 0.2
-    # saturation: 0.2
-    # hue: 0.1
-    # gaussian_blur: 0.1
-    # gaussian_noise: 0.1
+    horizontal_flip: 0.0
+    vertical_flip: 0.0
+    rotation: 0.
+    brightness: 0.0
+    contrast: 0.0
+    saturation: 0.0
+    hue: 0.00
+    
+    # Advanced Augmentations
+    mixup:
+      enabled: true
+      alpha: 0.2
+      beta: 0.2
+    
+    cutmix:
+      enabled: true
+      alpha: 1.0
+    
+    randaugment:
+      enabled: true
+      n: 1
+      m: 5
+    
+    color_jitter:
+      enabled: true
+      brightness: 0.5
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.05
   
   
   # Training Options

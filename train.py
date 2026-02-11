@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
+import numpy as np
 
 import os
 import yaml 
@@ -156,10 +157,36 @@ class Trainer:
             data, targets = data.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
             
+            # Apply MixUp or CutMix
+            aug_cfg = self.config['training']['augmentation']
+            use_mixup = aug_cfg.get('mixup', {}).get('enabled', False)
+            use_cutmix = aug_cfg.get('cutmix', {}).get('enabled', False)
+            
+            # Random toggle when both are enabled to use both augmentations
+            if use_mixup and use_cutmix:
+                if np.random.rand() < 0.5:
+                    data, targets_a, targets_b, lam = self.apply_mixup(data, targets)
+                    is_mixed = True
+                else:
+                    data, targets_a, targets_b, lam = self.apply_cutmix(data, targets)
+                    is_mixed = True
+            elif use_mixup:
+                data, targets_a, targets_b, lam = self.apply_mixup(data, targets)
+                is_mixed = True
+            elif use_cutmix:
+                data, targets_a, targets_b, lam = self.apply_cutmix(data, targets)
+                is_mixed = True
+            else:
+                targets_a, targets_b, lam = targets, None, None
+                is_mixed = False
+            
             if self.scaler:
                 with autocast('cuda'):
                     outputs = self.model(data)
-                    loss = self.criterion(outputs, targets)
+                    if is_mixed:
+                        loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
+                    else:
+                        loss = self.criterion(outputs, targets)
                 self.scaler.scale(loss).backward()
                 # Optional: Gradient Clipping
                 if self.config['training'].get('gradient_clip'):
@@ -169,14 +196,25 @@ class Trainer:
                 self.scaler.update()
             else:
                 outputs = self.model(data)
-                loss = self.criterion(outputs, targets)
+                if is_mixed:
+                    loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
+                else:
+                    loss = self.criterion(outputs, targets)
                 loss.backward()
                 self.optimizer.step()
             
             running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+            
+            # For mixed samples, use the first target for accuracy calculation
+            if is_mixed:
+                _, predicted = outputs.max(1)
+                total += targets_a.size(0)
+                correct += predicted.eq(targets_a).sum().item()
+            else:
+                _, predicted = outputs.max(1)
+                total += targets.size(0)
+                correct += predicted.eq(targets).sum().item()
+            
             pbar.set_postfix({'Loss': f'{running_loss/total:.4f}', 'Acc': f'{100.*correct/total:.2f}%'})
             
         # Log to TensorBoard
@@ -251,6 +289,85 @@ class Trainer:
         """Close TensorBoard writer manually if needed."""
         if hasattr(self, 'writer') and self.writer:
             self.writer.close()
+    
+    def apply_mixup(self, data, targets):
+        """Apply MixUp augmentation to batch."""
+        aug_cfg = self.config['training']['augmentation']
+        mixup_cfg = aug_cfg.get('mixup', {})
+        
+        if not mixup_cfg.get('enabled', False):
+            return data, targets, None
+        
+        alpha = mixup_cfg.get('alpha', 0.2)
+        beta = mixup_cfg.get('beta', 0.2)
+        
+        # Generate mixing parameter
+        lam = np.random.beta(alpha, beta)
+        lam = np.clip(lam, 0.7, 0.95)  # 70-95% original, 5-30% second
+        
+        # Random shuffle indices
+        index = torch.randperm(data.size(0)).to(self.device)
+        
+        # Mix data
+        mixed_data = lam * data + (1 - lam) * data[index]
+        
+        # Create targets for mixed samples
+        targets_a, targets_b = targets, targets[index]
+        
+        return mixed_data, targets_a, targets_b, lam
+    
+    def apply_cutmix(self, data, targets):
+        """Apply CutMix augmentation to batch."""
+        aug_cfg = self.config['training']['augmentation']
+        cutmix_cfg = aug_cfg.get('cutmix', {})
+        
+        if not cutmix_cfg.get('enabled', False):
+            return data, targets, None
+        
+        alpha = cutmix_cfg.get('alpha', 1.0)
+        
+        # Generate mixing parameter
+        lam = np.random.beta(alpha, alpha)
+        
+        # Random shuffle indices
+        index = torch.randperm(data.size(0)).to(self.device)
+        
+        # Generate random bounding box
+        bbx1, bby1, bbx2, bby2 = self.rand_bbox(data.size(), lam)
+        
+        # Apply CutMix
+        data[:, :, bbx1:bbx2, bby1:bby2] = data[index, :, bbx1:bbx2, bby1:bby2]
+        
+        # Adjust lambda based on actual area
+        lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (data.size()[-1] * data.size()[-2]))
+        
+        # Create targets for mixed samples
+        targets_a, targets_b = targets, targets[index]
+        
+        return data, targets_a, targets_b, lam
+    
+    def rand_bbox(self, size, lam):
+        """Generate random bounding box for CutMix."""
+        W = size[2]
+        H = size[3]
+        cut_rat = np.sqrt(1. - lam)
+        cut_w = int(W * cut_rat)
+        cut_h = int(H * cut_rat)
+        
+        # Uniform
+        cx = np.random.randint(W)
+        cy = np.random.randint(H)
+        
+        bbx1 = np.clip(cx - cut_w // 2, 0, W)
+        bby1 = np.clip(cy - cut_h // 2, 0, H)
+        bbx2 = np.clip(cx + cut_w // 2, 0, W)
+        bby2 = np.clip(cy + cut_h // 2, 0, H)
+        
+        return bbx1, bby1, bbx2, bby2
+    
+    def mixup_criterion(self, criterion, pred, y_a, y_b, lam):
+        """Loss function for MixUp/CutMix."""
+        return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 def main():
     with open('config.yaml', 'r') as f:
