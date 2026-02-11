@@ -90,7 +90,7 @@ def create_training_transforms(config: Dict) -> A.Compose:
     bg_masking_cfg = config.get('background_masking', {})
     
     if train_cfg.get('use_bg_masking') and bg_masking_cfg.get('cg_mask_dir'):
-        transforms_list.append(BackgroundMasking(json_path=bg_masking_cfg['cg_mask_dir'], p=1.0))
+        transforms_list.append(BackgroundMasking(json_path=bg_masking_cfg['cg_mask_dir'], always_apply=True))
 
     if train_cfg.get('use_fda') and fda_cfg.get('reference_dir'):
         # Use first beta value if provided
