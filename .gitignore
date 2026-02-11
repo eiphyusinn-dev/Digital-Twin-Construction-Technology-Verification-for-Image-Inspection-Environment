@@ -164,3 +164,6 @@ Thumbs.db
 # TAO pretrained models (if copied locally)
 pretrained_models/
 dataset/
+
+#background masking json
+cg_mask/

@@ -1,7 +1,7 @@
 """
 Albumentations-compatible wrappers for custom transforms
 """
-
+import json
 import cv2
 from pathlib import Path
 import numpy as np
@@ -67,6 +67,50 @@ class HistogramNormalization(A.ImageOnlyTransform):
         return cv2.cvtColor(equ, cv2.COLOR_GRAY2RGB)
 
 class BackgroundMasking(A.ImageOnlyTransform):
-    """Skip for now."""
-    def apply(self, image, **params): return image
+
+    def __init__(self, json_path: str=None, always_apply=False, p=1.0):
+        print("init bg masking")
+        super().__init__(always_apply, p)
+        self.json_path = Path(json_path)
+        self.mask_pth = self._load_json()
+
+    def _load_json(self):
+        print(f"Loading background mask JSON: {self.json_path}")
+        if self.json_path.exists():
+            print(f"JSON found. Loading mask data from {self.json_path}")
+            with open(self.json_path, 'r') as f:
+                return json.load(f)
+        return None
+
+    def apply(self, image: np.ndarray, **params) -> np.ndarray:
+        print("==============================================")
+        print(f"Applying BackgroundMasking with JSON: {self.json_path}")
+        print(f"Applying Masking. Image shape: {image.shape}")
+        if self.mask_pth is None:
+            return image
+
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        found_shape = False
+        for shape in self.mask_pth.get('shapes', []):
+            if shape['label'] == 'target_object':
+                pts = np.array(shape['points'], dtype=np.int32)
+                pts = pts.reshape((-1, 1, 2))
+                cv2.fillPoly(mask, [pts], 255)
+                found_shape = True
+
+        if not found_shape:
+            return image
+        
+        result = np.zeros_like(image)
+        
+        is_object = mask > 0
+        result[is_object] = image[is_object]
+
+        if image.shape[2] == 4:
+            result[~is_object, 3] = 255
+
+        return result
+
+
 

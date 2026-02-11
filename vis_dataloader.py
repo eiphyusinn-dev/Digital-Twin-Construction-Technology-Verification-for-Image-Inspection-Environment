@@ -51,6 +51,8 @@ class DataLoaderVisualizer:
         train_cfg = self.config['training']
         aug_cfg = self.config['training']['augmentation'] 
         fda_cfg = self.config.get('fda', {})
+        bg_masking_cfg = self.config.get('background_masking', {})
+
 
         for i, img_idx in enumerate(indices):
             img_path, label_idx = dataset.samples[img_idx]
@@ -64,7 +66,13 @@ class DataLoaderVisualizer:
             # History list for plotting steps
             history = [('Original', current_img.copy())]
 
-       
+            # Background Masking
+            if train_cfg.get('use_bg_masking') and bg_masking_cfg.get('cg_mask_dir'):
+                bg_mask = BackgroundMasking(json_path=bg_masking_cfg['cg_mask_dir'], always_apply=True)
+                print("finished bg masking")
+                current_img = bg_mask(image=raw_img)['image']
+                history.append(('+ Mask', current_img.copy()))
+
             # FDA
             if train_cfg.get('use_fda') and fda_cfg.get('reference_dir'):
                 beta = fda_cfg.get('beta_range', [0.05])[0]
@@ -77,10 +85,6 @@ class DataLoaderVisualizer:
                 current_img = HistogramNormalization(p=1.0)(image=current_img)['image']
                 history.append(('+ GHE', current_img.copy()))
 
-            # Background Masking
-            if train_cfg.get('use_bg_masking'):
-                current_img = BackgroundMasking(p=1.0)(image=current_img)['image']
-                history.append(('+ BG Mask', current_img.copy()))
 
             # --- PART 2: TRAINING AUGMENTATIONS (One-by-One) ---
             def apply_and_log(img, transform, label):

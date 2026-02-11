@@ -39,7 +39,7 @@ class InferenceEngine:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
             self.device = torch.device(device)
-        
+ 
         # Load model
         self.model = self._load_model(model_path)
         self.model.to(self.device)
@@ -79,11 +79,12 @@ class InferenceEngine:
     
     def _load_model(self, model_path: str) -> ConvNeXtV2:
         model = create_model(
-            model_name=self.model_config.get('model_name', 'convnextv2_large'),
+            # model_name=self.model_config.get('model_name', 'convnextv2_large'),
             num_classes=self.model_config.get('num_classes', 2),
             in_chans=self.model_config.get('in_chans', 3),
             drop_path_rate=self.model_config.get('drop_path_rate', 0.1)
         )
+        
         checkpoint = torch.load(model_path, map_location='cpu')
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         model.load_state_dict(state_dict)
@@ -167,7 +168,7 @@ def main():
         config = yaml.safe_load(f)
 
     model_config = {
-        'model_name': config['model']['name'],
+        # 'model_name': config['model']['name'],
         'num_classes': config['classes']['num_classes'],
         'in_chans': config['model']['in_chans'],
         'input_size': config['dataset']['input_size'],

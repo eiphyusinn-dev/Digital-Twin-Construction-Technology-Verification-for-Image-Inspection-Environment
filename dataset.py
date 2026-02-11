@@ -87,7 +87,11 @@ def create_training_transforms(config: Dict) -> A.Compose:
     # --- 1. Preprocessing (Conditional on training flags) ---
     train_cfg = config.get('training', {})
     fda_cfg = config.get('fda', {})
+    bg_masking_cfg = config.get('background_masking', {})
     
+    if train_cfg.get('use_bg_masking') and bg_masking_cfg.get('cg_mask_dir'):
+        transforms_list.append(BackgroundMasking(json_path=bg_masking_cfg['cg_mask_dir'], p=1.0))
+
     if train_cfg.get('use_fda') and fda_cfg.get('reference_dir'):
         # Use first beta value if provided
         beta = fda_cfg.get('beta_range', [0.05])[0]
@@ -96,8 +100,7 @@ def create_training_transforms(config: Dict) -> A.Compose:
     if train_cfg.get('use_hist_norm'):
         transforms_list.append(HistogramNormalization(p=1.0))
     
-    if train_cfg.get('use_bg_masking'):
-        transforms_list.append(BackgroundMasking(p=1.0))
+    
     
     # --- 2. Geometric & Color Augmentations---
     aug_cfg = config['training'].get('augmentation', {})
@@ -160,11 +163,12 @@ def create_validation_transforms(config: Dict) -> A.Compose:
     train_cfg = config['training']
     input_size = config['dataset']['input_size']
     
+    bg_masking_cfg = config.get('background_masking', {})
 
     if train_cfg.get('use_hist_norm'):
         transforms_list.append(HistogramNormalization(p=1.0))
     if train_cfg.get('use_bg_masking'):
-        transforms_list.append(BackgroundMasking())
+        transforms_list.append(BackgroundMasking(json_path=bg_masking_cfg['cg_mask_dir'], p=1.0))
 
     transforms_list.extend([
         A.Resize(input_size, input_size),

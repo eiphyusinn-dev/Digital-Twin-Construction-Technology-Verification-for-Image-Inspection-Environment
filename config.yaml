@@ -3,7 +3,7 @@
 # Dataset Configuration
 dataset:
   root_dir: "dataset"
-  train_dir: "train"
+  train_dir: "tem"
   val_dir: "val"
   test_dir: "test"
   input_size: 224
@@ -18,7 +18,7 @@ classes:
 
 # Model Configuration
 model:
-  name: "convnextv2_large"
+  #name: "convnextv2_large" 
   pretrained: True
   drop_path_rate: 0.1
   in_chans: 3
@@ -34,7 +34,7 @@ training:
   # Preprocessing Features
   use_fda: False
   use_hist_norm: False
-  use_bg_masking: False
+  use_bg_masking: True
 
 
   # Augmentations 
@@ -49,9 +49,9 @@ training:
     # gaussian_blur: 0.1
     # gaussian_noise: 0.1
   
-  
+
   # Training Options
-  freeze_backbone: True
+  freeze_backbone: False
   use_amp: true
   gradient_clip: 1.0
   
@@ -60,10 +60,11 @@ inference:
   threshold: 0.5
   device: "cuda"
   
+
 # Paths Configuration
 paths:
   tao_weights: "../pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
-  output_dir: "outputs"
+  # output_dir: "outputs"
   log_dir: "logs"
   checkpoint_dir: "checkpoints"
   visualization_dir: "visualizations"
@@ -73,6 +74,10 @@ logging:
   log_interval: 10
   save_interval: 5
   eval_interval: 2
+
+#background_masking parameters
+background_masking:
+    cg_mask_dir: "cg_mask/mask_label.json"
 
 # FDA Parameters
 fda:

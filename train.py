@@ -51,6 +51,7 @@ class Trainer:
         
         # Mixed precision training from hardware/training config
         use_amp = config['training'].get('use_amp', False) or config['hardware'].get('mixed_precision', False)
+
         self.scaler = GradScaler() if use_amp else None
         
         # Setup TensorBoard writer
@@ -76,6 +77,8 @@ class Trainer:
     def _create_optimizer(self) -> optim.Optimizer:
         train_cfg = self.config['training']
         # Defaulting to AdamW as per your model needs
+        # print(f"Creating optimizer with learning rate: {train_cfg['learning_rate']} and weight decay: {train_cfg['weight_decay']}")
+        
         return optim.AdamW(
             self.model.parameters(),
             lr=float(train_cfg['learning_rate']),
@@ -99,7 +102,7 @@ class Trainer:
             T_max=train_cfg['epochs'],
             eta_min=train_cfg.get('min_lr', 0.0)
         )
-        
+
         # Apply warmup if specified
         if train_cfg.get('warmup_epochs', 0) > 0:
             from torch.optim.lr_scheduler import _LRScheduler
@@ -257,13 +260,17 @@ def main():
         config = yaml.safe_load(f)
 
     model = create_model(
-        model_name=config['model']['name'],
+        # model_name=config['model']['name'],
         num_classes=config['classes']['num_classes'],
         in_chans=config['model']['in_chans'],
         drop_path_rate=config['model']['drop_path_rate']
     )
 
     tao_path = config['paths']['tao_weights']
+    print(f"TAO  path: {tao_path}")
+
+    # print(f"-in_chans: {model.downsample_layers[0][0].in_channels}")
+  
     if config['model']['pretrained']:
         if os.path.exists(tao_path):
             print(f"Loading TAO weights from {tao_path}")

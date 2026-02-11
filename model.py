@@ -103,6 +103,8 @@ class ConvNeXtV2(nn.Module):
             nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
             LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
+        # print(f"in_chans: {in_chans}, stem out channels: {dims[0]}")
+
         self.downsample_layers.append(stem)
         for i in range(3):
             downsample_layer = nn.Sequential(
@@ -112,8 +114,11 @@ class ConvNeXtV2(nn.Module):
             self.downsample_layers.append(downsample_layer)
 
         self.stages = nn.ModuleList() # 4 feature resolution stages, each consisting of multiple residual blocks
-        dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))] 
+        dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  ## used config model-> droppath rate
         cur = 0
+        # print(f"Total blocks: {sum(depths)}, Drop path rates: {dp_rates}")
+        
+        
         for i in range(4):
             stage = nn.Sequential(
                 *[Block(dim=dims[i], drop_path=dp_rates[cur + j]) for j in range(depths[i])]
