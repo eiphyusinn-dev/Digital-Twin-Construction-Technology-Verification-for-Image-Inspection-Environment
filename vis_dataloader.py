@@ -17,11 +17,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from dataset import (
     ClientCustomDataset, 
-    FDATransform, 
-    HistogramNormalization, 
-    BackgroundMasking,
     create_training_transforms
 )
+
+from utils.preprocessing import FDATransform, HistogramNormalization, BackgroundMasking
+
 import albumentations as A
 
 class DataLoaderVisualizer:
@@ -40,6 +40,7 @@ class DataLoaderVisualizer:
         dataset = ClientCustomDataset(
             root_dir=str(self.root_dir),
             split_path= self.root_dir / self.train_dir,
+            config=self.config,
             transform=None, 
             class_names=self.config['classes']['names']
         )
@@ -53,36 +54,64 @@ class DataLoaderVisualizer:
         train_cfg = self.config['training']
         aug_cfg = self.config['training']['augmentation'] 
         fda_cfg = self.config.get('fda', {})
+        bg_masking_cfg = self.config.get('background_masking', {})
 
         for i, img_idx in enumerate(indices):
             img_path, label_idx = dataset.samples[img_idx]
             class_name = dataset.class_names[label_idx]
             
-            # Load and initial resize
+            # Load image (original size)
             raw_img = cv2.imread(img_path)
             raw_img = cv2.cvtColor(raw_img, cv2.COLOR_BGR2RGB)
-            current_img = cv2.resize(raw_img, (self.input_size, self.input_size))
+            current_img = raw_img.copy()  # Work on original size
             
-            # History list for plotting steps
-            history = [('Original', current_img.copy())]
+            # History list for plotting steps - use Lanczos for better quality
+            def resize_vis(img):
+                return cv2.resize(img, (self.input_size, self.input_size), interpolation=cv2.INTER_LANCZOS4)
+            
+            history = [('Original', resize_vis(current_img).copy())]
 
+            # history = [('Original', current_img.copy())]
+
+
+            # Background Masking (on original size) - choose mask based on image type
+            if train_cfg.get('use_bg_masking'):
+                filename = Path(img_path).name
+                orig_h, orig_w = current_img.shape[:2]
+                
+                if filename.startswith('cg_') and bg_masking_cfg.get('cg_mask_json'):
+                    bg_mask = BackgroundMasking(json_path=bg_masking_cfg['cg_mask_json'], 
+                                                original_size=(orig_w, orig_h), always_apply=True)
+                    current_img = bg_mask(image=current_img)['image']
+                    history.append(('+ Mask (CG)', resize_vis(current_img).copy()))
+                elif filename.startswith('real_') and bg_masking_cfg.get('real_mask_json'):
+                    bg_mask = BackgroundMasking(json_path=bg_masking_cfg['real_mask_json'], 
+                                                original_size=(orig_w, orig_h), always_apply=True)
+                    current_img = bg_mask(image=current_img)['image']
+                    history.append(('+ Mask (Real)', resize_vis(current_img).copy()))
        
-            # FDA
-            if train_cfg.get('use_fda') and fda_cfg.get('reference_dir'):
-                beta = fda_cfg.get('beta_range', [0.05])[0]
+            # FDA (on original size, only for images matching filename_filter prefix)
+            filename = Path(img_path).name
+            filename_filter = fda_cfg.get('filename_filter', 'cg_')  # Default to 'cg_' if not set
+            if filename.startswith(filename_filter) and train_cfg.get('use_fda', False) and fda_cfg.get('reference_dir'):
+                # Random beta sampling from range
+                beta_range = fda_cfg.get('beta_range', [0.05, 0.05])
+                if isinstance(beta_range, list) and len(beta_range) == 2:
+                    beta = np.random.uniform(beta_range[0], beta_range[1])
+                else:
+                    beta = beta_range[0] if isinstance(beta_range, list) else beta_range
+                    
                 fda_tf = FDATransform(fda_cfg['reference_dir'], beta_limit=beta, always_apply=True)
                 current_img = fda_tf(image=current_img)['image']
-                history.append(('+ FDA', current_img.copy()))
+                history.append(('+ FDA', resize_vis(current_img).copy()))
 
-            # Histogram Norm (GHE)
+            # Histogram Norm (GHE) (on original size)
             if train_cfg.get('use_hist_norm'):
                 current_img = HistogramNormalization(p=1.0)(image=current_img)['image']
-                history.append(('+ GHE', current_img.copy()))
-
-            # Background Masking
-            if train_cfg.get('use_bg_masking'):
-                current_img = BackgroundMasking(p=1.0)(image=current_img)['image']
-                history.append(('+ BG Mask', current_img.copy()))
+                history.append(('+ GHE', resize_vis(current_img).copy()))
+            
+            # NOW Resize after all preprocessing
+            current_img = cv2.resize(current_img, (self.input_size, self.input_size))
 
             # --- PART 2: TRAINING AUGMENTATIONS (One-by-One) ---
             def apply_and_log(img, transform, label):
@@ -191,7 +220,7 @@ class DataLoaderVisualizer:
                     second_img_path, _ = dataset.samples[second_idx]
                     second_img = cv2.imread(second_img_path)
                     second_img = cv2.cvtColor(second_img, cv2.COLOR_BGR2RGB)
-                    second_img = cv2.resize(second_img, (self.input_size, self.input_size))
+                    second_img = cv2.resize(second_img, (current_img.shape[1], current_img.shape[0]))
                     
                     # Create realistic MixUp
                     lam = np.random.beta(alpha, alpha)
@@ -219,7 +248,7 @@ class DataLoaderVisualizer:
                     second_img_path, _ = dataset.samples[second_idx]
                     second_img = cv2.imread(second_img_path)
                     second_img = cv2.cvtColor(second_img, cv2.COLOR_BGR2RGB)
-                    second_img = cv2.resize(second_img, (self.input_size, self.input_size))
+                    second_img = cv2.resize(second_img, (current_img.shape[1], current_img.shape[0]))
                     
                     # Create realistic CutMix
                     lam = np.random.beta(alpha, alpha)

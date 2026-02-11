@@ -7,7 +7,7 @@ dataset:
   val_dir: "val"
   test_dir: "test"
   input_size: 224
-  batch_size: 8
+  batch_size: 2
   num_workers: 4
   
 # Class Configuration
@@ -32,9 +32,9 @@ training:
   min_lr: 1e-6
   
   # Preprocessing Features
+  use_bg_masking: true
   use_fda: false
   use_hist_norm: false
-  use_bg_masking: false
 
 
   # Augmentations 
@@ -49,21 +49,21 @@ training:
     
     # Advanced Augmentations
     mixup:
-      enabled: true
+      enabled: false
       alpha: 0.2
       beta: 0.2
     
     cutmix:
-      enabled: true
+      enabled: false
       alpha: 1.0
     
     randaugment:
-      enabled: true
+      enabled: false
       n: 1
       m: 5
     
     color_jitter:
-      enabled: true
+      enabled: false
       brightness: 0.5
       contrast: 0.1
       saturation: 0.1
@@ -78,7 +78,6 @@ training:
 # Inference Configuration
 inference:
   threshold: 0.5
-  device: "cuda"
   
 # Paths Configuration
 paths:
@@ -94,10 +93,16 @@ logging:
   save_interval: 5
   eval_interval: 2
 
+#background_masking parameters
+background_masking:
+    cg_mask_json: "mask/cg_mask_label.json"    # For CG images (cg_*.png)
+    real_mask_json: "mask/real_mask_label.json"  # For real images (real_*.png)
+
 # FDA Parameters
 fda:
   beta_range: [0.1, 0.4]
-  reference_dir: 'dataset/test/dog/dog.4001.jpg'
+  reference_dir: 'dataset/train/NG/real_1_7000_0.png'
+  filename_filter: 'cg_'  # Only apply FDA to images starting with this prefix
   
 # Hardware Configuration
 hardware:

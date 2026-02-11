@@ -18,12 +18,50 @@ class ClientCustomDataset(Dataset):
     def __init__(self, 
                  split_path: Path,
                  root_dir: Path,
+                 config: Dict,
                  transform: Optional[Callable] = None,
                  class_names: Optional[List[str]] = None):
         self.split_path = Path(split_path)
         self.root_dir = Path(root_dir)
+        self.config = config
         self.transform = transform
         self.samples = []
+        
+        # Cache config sections for performance
+        self.bg_masking_cfg = config.get('background_masking', {})
+        self.fda_cfg = config.get('fda', {})
+        self.train_cfg = config.get('training', {})
+        
+        # Initialize transforms once for performance
+        self.bg_mask_cg = None
+        self.bg_mask_real = None
+        self.fda_transform = None
+        
+        # Initialize background masking transforms
+        if self.train_cfg.get('use_bg_masking', False):
+            from utils.preprocessing import BackgroundMasking
+            if self.bg_masking_cfg.get('cg_mask_json'):
+                self.bg_mask_cg = BackgroundMasking(
+                    json_path=self.bg_masking_cfg['cg_mask_json'],
+                    always_apply=True
+                )
+            if self.bg_masking_cfg.get('real_mask_json'):
+                self.bg_mask_real = BackgroundMasking(
+                    json_path=self.bg_masking_cfg['real_mask_json'],
+                    always_apply=True
+                )
+        
+        # Initialize FDA transform
+        if self.train_cfg.get('use_fda', False) and self.fda_cfg.get('reference_dir'):
+            from utils.preprocessing import FDATransform
+            beta_range = self.fda_cfg.get('beta_range', [0.05, 0.05])
+            beta_init = beta_range[0] if isinstance(beta_range, list) else beta_range
+            self.fda_transform = FDATransform(
+                self.fda_cfg['reference_dir'],
+                beta_limit=beta_init,
+                always_apply=True
+            )
+            self.beta_range = beta_range
         
         # Determine class names
         self.class_names = self._prepare_class_names(class_names)
@@ -72,6 +110,23 @@ class ClientCustomDataset(Dataset):
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
+        # Conditional Background Masking based on image type
+        filename = Path(img_path).name
+        
+        if self.train_cfg.get('use_bg_masking', False):
+            if filename.startswith('cg_') and self.bg_mask_cg:
+                image = self.bg_mask_cg(image=image)['image']
+            elif filename.startswith('real_') and self.bg_mask_real:
+                image = self.bg_mask_real(image=image)['image']
+        
+        # Conditional FDA: only apply to images matching filename_filter prefix
+        filename_filter = self.fda_cfg.get('filename_filter', 'cg_')
+        if filename.startswith(filename_filter) and self.train_cfg.get('use_fda', False) and self.fda_transform:
+            # Update beta dynamically if range is provided
+            if isinstance(self.beta_range, list) and len(self.beta_range) == 2:
+                self.fda_transform.beta = np.random.uniform(self.beta_range[0], self.beta_range[1])
+            image = self.fda_transform(image=image)['image']
+        
         if self.transform:
             transformed = self.transform(image=image)
             image = transformed['image']
@@ -84,26 +139,21 @@ def create_training_transforms(config: Dict) -> A.Compose:
     """
     transforms_list = []
     
-    # --- 1. ALWAYS Resize First ---
-    input_size = config['dataset'].get('input_size', 224)
-    transforms_list.append(A.Resize(input_size, input_size))
-    
-    # --- 2. Preprocessing (Conditional on training flags) ---
+    # --- 1. Preprocessing on Original Size (before Resize) ---
     train_cfg = config.get('training', {})
     fda_cfg = config.get('fda', {})
     
-    if train_cfg.get('use_fda') and fda_cfg.get('reference_dir'):
-        # Use first beta value if provided
-        beta = fda_cfg.get('beta_range', [0.05])[0]
-        transforms_list.append(FDATransform(fda_cfg['reference_dir'], beta_limit=beta, always_apply=True))
+    # Background masking is handled in __getitem__ - not here
+    # FDA is handled in __getitem__ - not here
     
     if train_cfg.get('use_hist_norm'):
         transforms_list.append(HistogramNormalization(p=1.0))
     
-    if train_cfg.get('use_bg_masking'):
-        transforms_list.append(BackgroundMasking(p=1.0))
+    # --- 2. Resize AFTER preprocessing ---
+    input_size = config['dataset'].get('input_size', 224)
+    transforms_list.append(A.Resize(input_size, input_size))
     
-    # --- 3. Geometric & Color Augmentations---
+    # --- 3. Geometric & Color Augmentations ---
     aug_cfg = config['training'].get('augmentation', {})
     
     # Check Horizontal Flip
@@ -187,14 +237,12 @@ def create_validation_transforms(config: Dict) -> A.Compose:
     Standard validation pipeline.
     """
     transforms_list = []
-    train_cfg = config['training']
+    train_cfg = config.get('training', {})
     input_size = config['dataset']['input_size']
     
-
+    # Background masking is handled in __getitem__ - not here
     if train_cfg.get('use_hist_norm'):
         transforms_list.append(HistogramNormalization(p=1.0))
-    if train_cfg.get('use_bg_masking'):
-        transforms_list.append(BackgroundMasking())
 
     transforms_list.extend([
         A.Resize(input_size, input_size),
@@ -218,6 +266,7 @@ def get_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
     train_dataset = ClientCustomDataset(
         split_path=root_path / ds_cfg['train_dir'],
         root_dir=root_path,
+        config=config,
         transform=train_transform,
         class_names=config['classes']['names']
     )
@@ -225,6 +274,7 @@ def get_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
     val_dataset = ClientCustomDataset(
         split_path=root_path / ds_cfg['val_dir'],
         root_dir=root_path,
+        config=config,
         transform=val_transform,
         class_names=config['classes']['names']
     )
