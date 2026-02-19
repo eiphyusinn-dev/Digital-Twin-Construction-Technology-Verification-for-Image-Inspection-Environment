@@ -380,20 +380,34 @@ def main():
         drop_path_rate=config['model']['drop_path_rate']
     )
 
-    tao_path = config['paths']['tao_weights']
+    tao_path = Path(config['paths']['tao_weights']).expanduser().resolve()
+
     if config['model']['pretrained']:
-        if os.path.exists(tao_path):
-            print(f"Loading TAO weights from {tao_path}")
-            tao_dict = torch.load(tao_path, map_location='cpu')
-            # Access the actual state_dict from TAO checkpoint
-            if 'state_dict' in tao_dict:
-                tao_weights = tao_dict['state_dict']
-            else:
-                tao_weights = tao_dict
-            loaded, missing = model.load_tao_weights(tao_weights)
-            print(f"Loaded {loaded} weights from TAO checkpoint")
-            print(f"Missing keys: {missing}")
-    
+        print(f"Checking TAO path: {tao_path}")
+        if not tao_path.exists():
+            print(f"[ERROR] TAO weight file not found: {tao_path}")
+        else:
+            try:
+                print(f"Loading TAO weights from {tao_path}")
+                tao_dict = torch.load(tao_path, map_location='cpu')
+
+                if isinstance(tao_dict, dict) and 'state_dict' in tao_dict:
+                    tao_weights = tao_dict['state_dict']
+                else:
+                    tao_weights = tao_dict
+
+                loaded, missing = model.load_tao_weights(tao_weights)
+
+                print(f"Loaded {loaded} weights from TAO checkpoint")
+                print(f"Missing keys: {missing}")
+
+            except Exception as e:
+                print(f"[ERROR] Failed to load TAO weights.")
+                print(f"Reason: {e}")
+    else:
+        print("Model pretrained flag is False")
+       
+
     if config['training'].get('freeze_backbone'):
         for name, param in model.named_parameters():
             if 'head' not in name: param.requires_grad = False
