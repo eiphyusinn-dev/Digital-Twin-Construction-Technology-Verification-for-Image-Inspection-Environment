@@ -138,7 +138,7 @@ class InferenceEngine:
         
         text = f"{pred_class}: {confidence:.2f}"
         overlay = img.copy()
-        cv2.rectangle(overlay, (0, 0), (img.shape[1], 60), color, -1)
+        # cv2.rectangle(overlay, (0, 0), (img.shape[1], 60), color, -1)
         img = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
         cv2.putText(img, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
         
@@ -180,7 +180,7 @@ def main():
     engine = InferenceEngine(
         model_path=args.model_path,
         model_config=model_config,
-        device=args.device or config['inference']['device'],
+        device=args.device or config['hardware']['device'],
         threshold=args.threshold or config['inference']['threshold']
     )
     

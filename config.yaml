@@ -2,12 +2,12 @@
 
 # Dataset Configuration
 dataset:
-  root_dir: "dataset"
+  root_dir: "/home/gwm-279/Desktop/tao_experiments/custom_pytorch_pipeline/patch_splitting_utils/patch_dataset_with_bg"
   train_dir: "train"
   val_dir: "val"
   test_dir: "test"
   input_size: 224
-  batch_size: 2
+  batch_size: 8
   num_workers: 4
   
 # Class Configuration
@@ -32,7 +32,7 @@ training:
   min_lr: 1e-6
   
   # Preprocessing Features
-  use_bg_masking: true
+  use_bg_masking: false
   use_fda: false
   use_hist_norm: false
 
@@ -49,7 +49,7 @@ training:
     
     # Advanced Augmentations
     mixup:
-      enabled: false
+      enabled: true
       alpha: 0.2
       beta: 0.2
     
@@ -63,7 +63,7 @@ training:
       m: 5
     
     color_jitter:
-      enabled: false
+      enabled: true
       brightness: 0.5
       contrast: 0.1
       saturation: 0.1
@@ -77,7 +77,7 @@ training:
   
 # Inference Configuration
 inference:
-  threshold: 0.5
+  threshold: 0.7
   
 # Paths Configuration
 paths:
@@ -102,7 +102,7 @@ background_masking:
 fda:
   beta_range: [0.1, 0.4]
   reference_dir: 'dataset/train/NG/real_1_7000_0.png'
-  filename_filter: 'cg_'  # Only apply FDA to images starting with this prefix
+  filename_filter: 'cg_'  # Only apply FDA to images starting with this prefixzz
   
 # Hardware Configuration
 hardware:

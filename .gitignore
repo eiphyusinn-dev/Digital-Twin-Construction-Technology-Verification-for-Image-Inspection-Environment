@@ -164,3 +164,8 @@ Thumbs.db
 # TAO pretrained models (if copied locally)
 pretrained_models/
 dataset/
+
+#Testing with patches 
+patch_testing/
+patch_splitting_data/
+inference_results/
