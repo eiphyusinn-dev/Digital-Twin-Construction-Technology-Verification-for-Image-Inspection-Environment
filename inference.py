@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Simplified Inference Pipeline for ConvNeXt-V2 Model (Direct Classification)
+Fixed Inference Pipeline with Background Masking
+===============================================
+
+Simple inference script that applies background masking during inference
+to match training pipeline distribution.
 """
 
 import torch
@@ -22,17 +26,18 @@ from tqdm import tqdm
 from model import create_model, ConvNeXtV2
 from dataset import create_validation_transforms
 
-class InferenceEngine:
+
+class SimpleInferenceEngine:
     """
-    Inference engine for ConvNeXt-V2 model.
+    Simple inference engine with background masking.
     """
     
     def __init__(self, 
                  model_path: str,
-                 model_config: Dict,
+                 config: Dict,
                  device: Optional[str] = None,
                  threshold: float = 0.5):
-        self.model_config = model_config
+        self.config = config
         self.threshold = threshold
         
         if device is None:
@@ -45,62 +50,109 @@ class InferenceEngine:
         self.model.to(self.device)
         self.model.eval()
         
-        # Setup transforms
+        # Setup background masking
+        self.use_bg_masking = config.get('training', {}).get('use_bg_masking', False)
+        self.bg_masking_cfg = config.get('background_masking', {})
+        
+        # Initialize background masks
+        self.bg_masks = {}
+        if self.use_bg_masking:
+            self._initialize_background_masks()
+        
+        # Setup transforms (without background masking - handled separately)
         temp_config = {
             'training': {
-                'use_hist_norm': model_config.get('use_hist_norm', False),
-                'use_bg_masking': model_config.get('use_bg_masking', False)
+                'use_hist_norm': config.get('use_hist_norm', False),
+                'use_bg_masking': False  # Background masking handled separately
             },
             'dataset': {
-                'input_size': model_config.get('input_size', 224)
+                'input_size': config.get('input_size', 224)
             }
         }
         self.transform = create_validation_transforms(temp_config)
         
-        # Class names logic
-        self.class_names = self._prepare_class_names(model_config.get('class_names', []))
+        # Class names
+        self.class_names = ['OK', 'NG']  # Default for binary classification
         
         print(f"Inference engine initialized on {self.device}")
-        print(f"Model loaded with classes: {self.class_names}")
+        print(f"Background masking: {'Enabled' if self.use_bg_masking else 'Disabled'}")
     
-    def _prepare_class_names(self, class_names_from_cfg: Optional[List[str]]) -> List[str]:
-        if class_names_from_cfg and len(class_names_from_cfg) > 0:
-            return class_names_from_cfg
+    def _initialize_background_masks(self):
+        """Initialize background masking transforms."""
+        try:
+            from utils.preprocessing import BackgroundMasking
             
-        classes_txt = Path("dataset/classes.txt")
-        if classes_txt.exists():
-            with open(classes_txt, 'r') as f:
-                content = f.read().strip()
-                names = content.split() if ' ' in content else content.splitlines()
-                names = [n.strip() for n in names if n.strip()]
-                if names: return names
+            if self.bg_masking_cfg.get('cg_mask_json'):
+                self.bg_masks['cg'] = BackgroundMasking(
+                    json_path=self.bg_masking_cfg['cg_mask_json'],
+                    always_apply=True
+                )
+                print(f"Loaded CG background mask: {self.bg_masking_cfg['cg_mask_json']}")
+            
+            if self.bg_masking_cfg.get('real_mask_json'):
+                self.bg_masks['real'] = BackgroundMasking(
+                    json_path=self.bg_masking_cfg['real_mask_json'],
+                    always_apply=True
+                )
+                print(f"Loaded Real background mask: {self.bg_masking_cfg['real_mask_json']}")
+                
+        except Exception as e:
+            print(f"Warning: Failed to initialize background masks: {e}")
+            self.use_bg_masking = False
+    
+    def _apply_background_masking(self, image: np.ndarray, image_path: str) -> np.ndarray:
+        """Apply appropriate background mask based on image filename."""
+        if not self.use_bg_masking:
+            return image
         
-        return ['cat', 'dog']
+        filename = os.path.basename(image_path)
+        
+        try:
+            if filename.startswith('cg_') and 'cg' in self.bg_masks:
+                return self.bg_masks['cg'](image=image)['image']
+            elif filename.startswith('real_') and 'real' in self.bg_masks:
+                return self.bg_masks['real'](image=image)['image']
+            else:
+                return image
+        except Exception as e:
+            print(f"Warning: Background masking failed for {filename}: {e}")
+            return image
     
     def _load_model(self, model_path: str) -> ConvNeXtV2:
+        """Load trained model."""
         model = create_model(
-            model_name=self.model_config.get('model_name', 'convnextv2_large'),
-            num_classes=self.model_config.get('num_classes', 2),
-            in_chans=self.model_config.get('in_chans', 3),
-            drop_path_rate=self.model_config.get('drop_path_rate', 0.1)
+            model_name=self.config.get('model_name', 'convnextv2_large'),
+            num_classes=self.config.get('num_classes', 2),
+            in_chans=self.config.get('in_chans', 3),
+            drop_path_rate=self.config.get('drop_path_rate', 0.1)
         )
+        
         checkpoint = torch.load(model_path, map_location='cpu')
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         model.load_state_dict(state_dict)
         return model
     
     def preprocess_image(self, image: Union[str, np.ndarray]) -> torch.Tensor:
+        """Preprocess image with background masking and transforms."""
         if isinstance(image, str):
             img = cv2.imread(image)
-            if img is None: raise ValueError(f"Could not load image: {image}")
+            if img is None: 
+                raise ValueError(f"Could not load image: {image}")
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            image_path = image
         else:
             img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if len(image.shape) == 3 else image
+            image_path = "unknown_image"
         
+        # Apply background masking FIRST
+        img = self._apply_background_masking(img, image_path)
+        
+        # Apply validation transforms
         transformed = self.transform(image=img)
         return transformed['image'].unsqueeze(0)
     
     def predict_single(self, image: Union[str, np.ndarray]) -> Dict:
+        """Predict single image with background masking."""
         input_tensor = self.preprocess_image(image).to(self.device)
         
         with torch.no_grad():
@@ -121,7 +173,6 @@ class InferenceEngine:
             'class_probabilities': {self.class_names[i]: float(p) for i, p in enumerate(probs)},
             'inference_time': inference_time
         }
-        
         if isinstance(image, str):
             result['annotated_image'] = self.create_classification_image(image, result)
         
@@ -138,7 +189,6 @@ class InferenceEngine:
         
         text = f"{pred_class}: {confidence:.2f}"
         overlay = img.copy()
-        # cv2.rectangle(overlay, (0, 0), (img.shape[1], 60), color, -1)
         img = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
         cv2.putText(img, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
         
@@ -148,56 +198,127 @@ class InferenceEngine:
         save_path = os.path.join(annotated_dir, fname)
         cv2.imwrite(save_path, img)
         return save_path
+    
+    def preview_image(self, image_path: str) -> str:
+        # Load original image
+        orig_img = cv2.imread(image_path)
+        if orig_img is None:
+            raise ValueError(f"Could not load image: {image_path}")
+        orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+        
+        # Apply background masking
+        masked_img = self._apply_background_masking(orig_img, image_path)
+        
+        # Create side-by-side comparison
+        h, w = orig_img.shape[:2]
+        comparison = np.zeros((h, w*2, 3), dtype=np.uint8)
+        
+        # Original on left
+        comparison[:, :w] = orig_img
+        
+        # Masked on right
+        comparison[:, w:] = masked_img
+        
 
-    def predict_batch(self, image_paths: List[str]) -> List[Dict]:
-        return [self.predict_single(p) for p in tqdm(image_paths, desc="Processing batch")]
+        # Original label
+        cv2.putText(comparison, "Original", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Masked label
+        cv2.putText(comparison, "Masked", (w+10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Save comparison
+        comparison_dir = "Inference_previews"
+        os.makedirs(comparison_dir, exist_ok=True)
+        fname = f"comparison_{os.path.basename(image_path)}"
+        save_path = os.path.join(comparison_dir, fname)
+        
+        # Convert RGB to BGR for OpenCV
+        comparison_bgr = cv2.cvtColor(comparison, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(save_path, comparison_bgr)
+        
+        return save_path
+
 
 def main():
-    parser = argparse.ArgumentParser(description='ConvNeXt-V2 Inference')
-    parser.add_argument('--model-path', type=str, required=True, help='Path to trained model checkpoint (.pth file)')
-    parser.add_argument('--config', type=str, default='config.yaml', help='Path to configuration file')
-    parser.add_argument('--input', type=str, required=True, help='Path to input image or directory for batch processing')
-    parser.add_argument('--output', type=str, help='Path to save inference results (JSON file)')
-    parser.add_argument('--threshold', type=float, help='Classification threshold (overrides config)')
-    parser.add_argument('--device', type=str, help='Device to run inference on (cuda/cpu)')
+    """Main inference function."""
+ 
+    parser = argparse.ArgumentParser(description='Fixed inference with background masking')
+    parser.add_argument('--model', required=True, help='Path to trained model')
+    parser.add_argument('--input', required=True, help='Path to image or directory')
+    parser.add_argument('--config', default='config.yaml', help='Path to config file')
+    parser.add_argument('--output', default='outputs', help='Output directory')
+    parser.add_argument('--threshold', type=float, default=0.5, help='Classification threshold')
+    parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
+    parser.add_argument('--save_preview', action='store_true', help='Save preprocessed preview images')
     
     args = parser.parse_args()
     
+    # Load config
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
-
-    model_config = {
-        'model_name': config['model']['name'],
-        'num_classes': config['classes']['num_classes'],
-        'in_chans': config['model']['in_chans'],
-        'input_size': config['dataset']['input_size'],
-        'drop_path_rate': config['model']['drop_path_rate'],
-        'use_hist_norm': config['training']['use_hist_norm'],
-        'use_bg_masking': config['training']['use_bg_masking'],
-        'class_names': config['classes'].get('names', [])
-    }
     
-    engine = InferenceEngine(
-        model_path=args.model_path,
-        model_config=model_config,
-        device=args.device or config['hardware']['device'],
-        threshold=args.threshold or config['inference']['threshold']
+    # Setup device
+    if args.device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    else:
+        device = args.device
+    
+    # Initialize inference engine
+    engine = SimpleInferenceEngine(
+        model_path=args.model,
+        config=config,
+        device=device,
+        threshold=args.threshold
     )
     
-    if os.path.isfile(args.input):
-        results = [engine.predict_single(args.input)]
-    else:
-        paths = [str(p) for p in Path(args.input).glob('**/*') if p.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']]
-        results = engine.predict_batch(paths)
+    # Process images
+    image_path = Path(args.input)
     
-    if args.output:
-        with open(args.output, 'w') as f: json.dump(results, f, indent=2)
+    if image_path.is_file():
+        # Single image
+        print(f"Processing single image: {image_path}")
+        
+        result = engine.predict_single(str(image_path))
+        if args.save_preview:
+            preview_path = engine.preview_image(str(image_path))
+        
+        print(f"Prediction: {result['predicted_class']} (confidence: {result['confidence']:.3f})")
+       
+        
+    elif image_path.is_dir():
+        # Directory of images
+        image_files = []
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+            image_files.extend(image_path.glob(ext))
+        
+        print(f"Processing {len(image_files)} images in directory: {image_path}")
+        
+        results = []
+        for img_file in tqdm(image_files, desc="Processing images"):
+            result = engine.predict_single(str(img_file))
+            if args.save_preview:
+                preview_path = engine.preview_image(str(img_file))
+            results.append({
+                'image': str(img_file),
+                'prediction': result['predicted_class'],
+                'confidence': result['confidence']
+            })
+        
+        # Print summary
+        ok_count = sum(1 for r in results if r['prediction'] == 'OK')
+        ng_count = sum(1 for r in results if r['prediction'] == 'NG')
+        
+        print(f"\n=== INFERENCE SUMMARY ===")
+        print(f"Total images: {len(results)}")
+        print(f"OK predictions: {ok_count} ({ok_count/len(results)*100:.1f}%)")
+        print(f"NG predictions: {ng_count} ({ng_count/len(results)*100:.1f}%)")
+        print(f"Average confidence: {np.mean([r['confidence'] for r in results]):.3f}")
+   
+    else:
+        print(f"Error: {image_path} is not a valid file or directory")
 
-    valid = [r for r in results if 'predicted_class' in r]
-    counts = {c: sum(1 for r in valid if r['predicted_class'] == c) for c in engine.class_names}
-    print("\nInference Summary:")
-    for c, count in counts.items():
-        print(f"  {c}: {count} ({100*count/len(valid):.1f}%)" if len(valid)>0 else f"  {c}: 0")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
