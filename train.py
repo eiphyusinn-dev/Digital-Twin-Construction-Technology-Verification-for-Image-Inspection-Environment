@@ -9,13 +9,12 @@ import numpy as np
 
 import os
 import yaml 
-import json
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-import numpy as np
 from tqdm import tqdm
 import logging
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_AVAILABLE = True
@@ -71,7 +70,6 @@ class Trainer:
         
         # Setup logging
         self._setup_logging()
-        # os.makedirs(config['paths']['output_dir'], exist_ok=True)
         os.makedirs(config['paths']['checkpoint_dir'], exist_ok=True)
     
     def _create_optimizer(self) -> optim.Optimizer:
@@ -91,50 +89,33 @@ class Trainer:
         return nn.CrossEntropyLoss()
     
     def _create_scheduler(self) -> Optional[optim.lr_scheduler._LRScheduler]:
-        # Implementation of Cosine Annealing with warmup
         train_cfg = self.config['training']
+        warmup_epochs = int(train_cfg.get('warmup_epochs', 0))
+        total_epochs = int(train_cfg['epochs'])
         
-        # Create cosine annealing scheduler with warmup
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, 
-            T_max=train_cfg['epochs'],
-            eta_min=train_cfg.get('min_lr', 0.0)
+        if warmup_epochs > 0:
+            # 1. Linear Warmup Scheduler
+            warmup_sched = optim.lr_scheduler.LinearLR(
+                self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+            )
+            
+            # 2. Cosine Annealing Scheduler (for the remaining epochs)
+            # cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
+            #     self.optimizer, T_max=(total_epochs - warmup_epochs), eta_min=float(train_cfg.get('min_lr', 0.0))
+            # )
+            cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=total_epochs, eta_min=float(train_cfg.get('min_lr', 0.0))
+            )
+            return optim.lr_scheduler.SequentialLR(
+                self.optimizer, 
+                schedulers=[warmup_sched, cosine_sched], 
+                milestones=[warmup_epochs]
+            )
+        
+        return optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=total_epochs, eta_min=float(train_cfg.get('min_lr', 0.0))
         )
-        
-        # Apply warmup if specified
-        if train_cfg.get('warmup_epochs', 0) > 0:
-            from torch.optim.lr_scheduler import _LRScheduler
-            
-            class WarmupCosineAnnealingLR(_LRScheduler):
-                def __init__(self, optimizer, T_max, eta_min, warmup_epochs):
-                    self.optimizer = optimizer
-                    self.T_max = T_max
-                    self.eta_min = eta_min
-                    self.warmup_epochs = warmup_epochs
-                    self.base_lrs = [group['lr'] for group in optimizer.param_groups]
-                    self.step_count = 0
-                    
-                def get_lr(self):
-                    if self.step_count < self.warmup_epochs:
-                        # Linear warmup
-                        return self.base_lrs[0] * (self.step_count + 1) / self.warmup_epochs
-                    else:
-                        # Cosine annealing
-                        return scheduler.get_lr()
-                
-                def step(self):
-                    self.step_count += 1
-                    return self.optimizer.step()
-                
-                def get_last_lr(self):
-                    return [self.get_lr()]
-            
-            return WarmupCosineAnnealingLR(self.optimizer, train_cfg['epochs'], 
-                                       train_cfg.get('min_lr', 0.0), 
-                                       train_cfg['warmup_epochs'])
-        
-        return scheduler
-    
+
     def _setup_logging(self):
         log_dir = self.config['paths']['log_dir']
         os.makedirs(log_dir, exist_ok=True)
@@ -223,7 +204,8 @@ class Trainer:
         if self.writer:
             self.writer.add_scalar('Train/Loss', epoch_loss, self.current_epoch)
             self.writer.add_scalar('Train/Accuracy', epoch_acc, self.current_epoch)
-            self.writer.add_scalar('Train/Learning_Rate', self.optimizer.param_groups[0]['lr'], self.current_epoch)
+            current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.optimizer.param_groups[0]['lr']
+            self.writer.add_scalar('Train/Learning_Rate', current_lr, self.current_epoch)
             
         return {'loss': epoch_loss, 'accuracy': epoch_acc}
 
@@ -256,11 +238,14 @@ class Trainer:
         for epoch in range(epochs):
             self.current_epoch = epoch
             train_m = self.train_epoch()
+            if self.scheduler: 
+                self.scheduler.step()
+                current_lr = self.scheduler.get_last_lr()[0]
+                self.logger.info(f"Epoch {epoch+1}: LR updated to {current_lr:.6f}")
             
             # Validate only at specified intervals
             if (epoch + 1) % eval_interval == 0:
                 val_m = self.validate()
-                if self.scheduler: self.scheduler.step()
                 
                 self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f}")
                 
