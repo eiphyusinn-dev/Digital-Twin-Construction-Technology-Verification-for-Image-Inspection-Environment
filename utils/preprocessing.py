@@ -72,16 +72,20 @@ class FDATransform(A.ImageOnlyTransform):
   
 class HistogramNormalization(A.ImageOnlyTransform):
     """
-    Global Histogram Equalization (GHE) based on OpenCV logic.
+    LAB CLAHE
     """
-    def apply(self, image: np.ndarray, **params) -> np.ndarray:
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        equ = cv2.equalizeHist(gray)
-        return cv2.cvtColor(equ, cv2.COLOR_GRAY2RGB)
+    def __init__(self, clip_limit: float = 2.0, tile_grid_size: tuple = (8, 8), always_apply=False, p=1.0):
+        super().__init__(always_apply, p)
+        self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
 
-# class BackgroundMasking(A.ImageOnlyTransform):
-#     """Skip for now."""
-#     def apply(self, image, **params): return image
+    def apply(self, image: np.ndarray, **params) -> np.ndarray:
+        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        l_channel=self.clahe.apply(l)
+
+        lab_enhanced= cv2.merge([l_channel, a, b])
+        clahe_rgb=cv2.cvtColor(lab_enhanced,cv2.COLOR_Lab2RGB)
+        return clahe_rgb
 
 class BackgroundMasking(A.ImageOnlyTransform):
 
