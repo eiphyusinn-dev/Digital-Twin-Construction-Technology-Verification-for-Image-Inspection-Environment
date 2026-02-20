@@ -29,6 +29,7 @@ class InferenceEngine:
         self.model_config = model_config
         self.full_config = full_config
         self.threshold = threshold
+        print(f'Inference threshold: {self.threshold}')
         self.patch_size = patch_size
         self.stride = stride
         
@@ -232,7 +233,7 @@ def main():
     parser.add_argument('--model', required=True, help='Path to trained model')
     parser.add_argument('--input', required=True, help='Path to image or directory')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
-    parser.add_argument('--threshold', type=float, default=0.7, help='NG detection threshold')
+    parser.add_argument('--threshold', type=float, help='NG detection threshold')
     parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
     parser.add_argument('--save_preview', action='store_true', help='Save masking comparison previews')
     
@@ -251,7 +252,7 @@ def main():
         model_config=config,
         full_config=config,
         device=device,
-        threshold=args.threshold
+        threshold=args.threshold or config['inference']['threshold']
     )
     
     # Process images

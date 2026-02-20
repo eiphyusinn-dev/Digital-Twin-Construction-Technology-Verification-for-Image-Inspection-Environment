@@ -39,6 +39,7 @@ class SimpleInferenceEngine:
                  threshold: float = 0.5):
         self.config = config
         self.threshold = threshold
+        print(f'Inference threshold: {self.threshold}')
         
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -248,8 +249,7 @@ def main():
     parser.add_argument('--model', required=True, help='Path to trained model')
     parser.add_argument('--input', required=True, help='Path to image or directory')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
-    parser.add_argument('--output', default='outputs', help='Output directory')
-    parser.add_argument('--threshold', type=float, default=0.5, help='Classification threshold')
+    parser.add_argument('--threshold', type=float, help='Classification threshold')
     parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
     parser.add_argument('--save_preview', action='store_true', help='Save preprocessed preview images')
     
@@ -270,7 +270,7 @@ def main():
         model_path=args.model,
         config=config,
         device=device,
-        threshold=args.threshold
+        threshold=args.threshold or config['inference']['threshold']
     )
     
     # Process images
@@ -315,7 +315,7 @@ def main():
         print(f"OK predictions: {ok_count} ({ok_count/len(results)*100:.1f}%)")
         print(f"NG predictions: {ng_count} ({ng_count/len(results)*100:.1f}%)")
         print(f"Average confidence: {np.mean([r['confidence'] for r in results]):.3f}")
-   
+
     else:
         print(f"Error: {image_path} is not a valid file or directory")
 
