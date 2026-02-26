@@ -167,5 +167,8 @@ dataset/
 
 #Testing with patches 
 patch_testing/
+patches_dataset/
 patch_splitting_data/
+reaLimage_cropped_patch/
 inference_results/
+results.json
