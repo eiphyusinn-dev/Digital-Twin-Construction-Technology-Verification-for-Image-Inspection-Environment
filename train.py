@@ -134,8 +134,22 @@ class Trainer:
         running_loss, correct, total = 0.0, 0, 0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
         
-        for data, targets in pbar:
-            data, targets = data.to(self.device), targets.to(self.device)
+        # Check if CoordConv is enabled
+        use_coordconv = self.config.get('coordconv', {}).get('enabled', False)
+        
+        for batch in pbar:
+            # Branch DataLoader unpacking
+            if use_coordconv:
+                data, targets, coords = batch
+                data = data.to(self.device)
+                targets = targets.to(self.device)
+                coords = coords.to(self.device)       # (batch, 2)
+            else:
+                data, targets = batch
+                data = data.to(self.device)
+                targets = targets.to(self.device)
+                coords = None
+            
             self.optimizer.zero_grad()
             
             # Apply MixUp or CutMix
@@ -146,24 +160,25 @@ class Trainer:
             # Random toggle when both are enabled to use both augmentations
             if use_mixup and use_cutmix:
                 if np.random.rand() < 0.5:
-                    data, targets_a, targets_b, lam = self.apply_mixup(data, targets)
+                    data, targets_a, targets_b, lam, mixed_coords = self.apply_mixup(data, targets, coords)
                     is_mixed = True
                 else:
-                    data, targets_a, targets_b, lam = self.apply_cutmix(data, targets)
+                    data, targets_a, targets_b, lam, mixed_coords = self.apply_cutmix(data, targets, coords)
                     is_mixed = True
             elif use_mixup:
-                data, targets_a, targets_b, lam = self.apply_mixup(data, targets)
+                data, targets_a, targets_b, lam, mixed_coords = self.apply_mixup(data, targets, coords)
                 is_mixed = True
             elif use_cutmix:
-                data, targets_a, targets_b, lam = self.apply_cutmix(data, targets)
+                data, targets_a, targets_b, lam, mixed_coords = self.apply_cutmix(data, targets, coords)
                 is_mixed = True
             else:
                 targets_a, targets_b, lam = targets, None, None
+                mixed_coords = coords
                 is_mixed = False
             
             if self.scaler:
                 with autocast('cuda'):
-                    outputs = self.model(data)
+                    outputs = self.model(data, coords=mixed_coords)
                     if is_mixed:
                         loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
                     else:
@@ -176,7 +191,7 @@ class Trainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                outputs = self.model(data)
+                outputs = self.model(data, coords=mixed_coords)
                 if is_mixed:
                     loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
                 else:
@@ -212,10 +227,22 @@ class Trainer:
     def validate(self) -> Dict[str, float]:
         self.model.eval()
         running_loss, correct, total = 0.0, 0, 0
+        
+        # Check if CoordConv is enabled
+        use_coordconv = self.config.get('coordconv', {}).get('enabled', False)
+        
         with torch.no_grad():
-            for data, targets in self.val_loader:
+            for batch in self.val_loader:
+                # Branch DataLoader unpacking
+                if use_coordconv:
+                    data, targets, coords = batch
+                    coords = coords.to(self.device)
+                else:
+                    data, targets = batch
+                    coords = None
+                
                 data, targets = data.to(self.device), targets.to(self.device)
-                outputs = self.model(data)
+                outputs = self.model(data, coords=coords)
                 loss = self.criterion(outputs, targets)
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -275,7 +302,7 @@ class Trainer:
         if hasattr(self, 'writer') and self.writer:
             self.writer.close()
     
-    def apply_mixup(self, data, targets):
+    def apply_mixup(self, data, targets, coords=None):
         """Apply MixUp augmentation to batch."""
         aug_cfg = self.config['training']['augmentation']
         mixup_cfg = aug_cfg.get('mixup', {})
@@ -299,9 +326,14 @@ class Trainer:
         # Create targets for mixed samples
         targets_a, targets_b = targets, targets[index]
         
-        return mixed_data, targets_a, targets_b, lam
+        # Blend coordinates with the same ratio
+        mixed_coords = None
+        if coords is not None:
+            mixed_coords = lam * coords + (1 - lam) * coords[index]
+        
+        return mixed_data, targets_a, targets_b, lam, mixed_coords
     
-    def apply_cutmix(self, data, targets):
+    def apply_cutmix(self, data, targets, coords=None):
         """Apply CutMix augmentation to batch."""
         aug_cfg = self.config['training']['augmentation']
         cutmix_cfg = aug_cfg.get('cutmix', {})
@@ -329,7 +361,12 @@ class Trainer:
         # Create targets for mixed samples
         targets_a, targets_b = targets, targets[index]
         
-        return data, targets_a, targets_b, lam
+        # Blend coordinates by area ratio
+        mixed_coords = None
+        if coords is not None:
+            mixed_coords = lam * coords + (1 - lam) * coords[index]
+        
+        return data, targets_a, targets_b, lam, mixed_coords
     
     def rand_bbox(self, size, lam):
         """Generate random bounding box for CutMix."""
@@ -362,7 +399,8 @@ def main():
         model_name=config['model']['name'],
         num_classes=config['classes']['num_classes'],
         in_chans=config['model']['in_chans'],
-        drop_path_rate=config['model']['drop_path_rate']
+        drop_path_rate=config['model']['drop_path_rate'],
+        use_coordconv=config.get('coordconv', {}).get('enabled', False)
     )
 
     tao_path = Path(config['paths']['tao_weights']).expanduser().resolve()

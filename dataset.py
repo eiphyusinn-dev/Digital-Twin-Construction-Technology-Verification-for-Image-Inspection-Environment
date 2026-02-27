@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 import os
 import yaml
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Callable
 from torch.utils.data import Dataset, DataLoader
@@ -31,6 +32,13 @@ class ClientCustomDataset(Dataset):
         self.bg_masking_cfg = config.get('background_masking', {})
         self.fda_cfg = config.get('fda', {})
         self.train_cfg = config.get('training', {})
+        
+        # Load CoordConv settings
+        self.coordconv_cfg = config.get('coordconv', {})
+        self.use_coordconv = self.coordconv_cfg.get('enabled', False)
+        if self.use_coordconv:
+            self.grid_rows = self.coordconv_cfg.get('grid_rows', 1)
+            self.grid_cols = self.coordconv_cfg.get('grid_cols', 1)
         
         # Initialize transforms once for performance
         self.bg_mask_cg = None
@@ -102,6 +110,29 @@ class ClientCustomDataset(Dataset):
         
         print(f"Loaded {len(self.samples)} samples for path: {self.split_path}")
 
+    def _parse_patch_coords(self, filepath: str) -> Tuple[float, float]:
+        """
+        Extract patch grid coordinates from filename and normalize to 0-1.
+        """
+        filename = Path(filepath).stem  # Filename without extension
+        match = re.search(r'_r(\d+)_c(\d+)_', filename)
+
+        if match:
+            row = int(match.group(1))
+            col = int(match.group(2))
+            # Normalize to 0-1 (avoid division by zero when grid_rows/cols is 1)
+            row_norm = row / max(self.grid_rows - 1, 1)
+            col_norm = col / max(self.grid_cols - 1, 1)
+            
+            # Safety clipping to prevent overflow if grid size changes
+            row_norm = np.clip(row_norm, 0.0, 1.0)
+            col_norm = np.clip(col_norm, 0.0, 1.0)
+
+            return (row_norm, col_norm)
+        else:
+            # Default to center when coordinates not found in filename
+            return (0.5, 0.5)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -130,6 +161,13 @@ class ClientCustomDataset(Dataset):
         if self.transform:
             transformed = self.transform(image=image)
             image = transformed['image']
+        
+        # CoordConv: Return coordinate tensor as additional output
+        if self.use_coordconv:
+            row_norm, col_norm = self._parse_patch_coords(img_path)
+            coords = torch.tensor([row_norm, col_norm], dtype=torch.float32)
+            return image, label, coords
+
         return image, label
 
 def create_training_transforms(config: Dict) -> A.Compose:
