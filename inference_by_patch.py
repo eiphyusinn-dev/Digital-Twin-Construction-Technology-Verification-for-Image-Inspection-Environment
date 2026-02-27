@@ -135,7 +135,7 @@ class InferenceEngine:
                 })
         return patches
 
-    def predict_full_image(self, image_path: str, save_preview: bool = True) -> Dict:
+    def predict_full_image(self, image_path: str,  annotated_dir: str, save_preview: bool = True) -> Dict:
         """Main prediction method - updated for CoordConv."""
         filename = os.path.basename(image_path)
         original_img_bgr = cv2.imread(image_path)
@@ -197,7 +197,7 @@ class InferenceEngine:
         overall_label = "NG" if len(ng_patches) > 0 else "OK"
         
         # Create visualization
-        vis_path = self._create_visual_result(original_img_bgr, ng_patches, overall_label, image_path)
+        vis_path = self._create_visual_result(original_img_bgr, ng_patches, overall_label, image_path, annotated_dir)
 
         return {
             'filename': filename,
@@ -224,7 +224,7 @@ class InferenceEngine:
         
         cv2.imwrite(str(prev_dir / f"mask_check_{filename}"), comparison)
 
-    def _create_visual_result(self, img, ng_patches, label, original_path):
+    def _create_visual_result(self, img, ng_patches, label, original_path, annotated_dir):
         """Create visualization."""
         vis_img = img.copy()
         overlay = img.copy()
@@ -241,7 +241,6 @@ class InferenceEngine:
         cv2.putText(vis_img, f"RESULT: {label} | NG Patches: {len(ng_patches)}", 
                     (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-        annotated_dir = "annotated_images"
         os.makedirs(annotated_dir, exist_ok=True)
         fname = f"annotated_{os.path.basename(original_path)}"
         save_path = os.path.join(annotated_dir, fname)
@@ -257,6 +256,8 @@ def main():
     parser.add_argument('--threshold', type=float, help='NG detection threshold')
     parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
     parser.add_argument('--save_preview', action='store_true', help='Save masking comparison previews')
+    parser.add_argument('--annotated_dir', default='inference_results_coordconv_training/annotated_images_bgmask')
+    
     
     args = parser.parse_args()
     
@@ -276,7 +277,7 @@ def main():
     input_path = Path(args.input)
     
     if input_path.is_file():
-        result = engine.predict_full_image(str(input_path), save_preview=args.save_preview)
+        result = engine.predict_full_image(str(input_path), save_preview=args.save_preview, annotated_dir=args.annotated_dir)
         print(f"\n=== RESULT ===")
         print(f"File: {result['filename']}")
         print(f"Prediction: {result['overall_prediction']}")
@@ -292,7 +293,7 @@ def main():
         
         results = []
         for img_file in tqdm(image_files, desc="Processing images"):
-            result = engine.predict_full_image(str(img_file), save_preview=args.save_preview)
+            result = engine.predict_full_image(str(img_file), save_preview=args.save_preview, annotated_dir=args.annotated_dir)
             results.append(result)
             print(f"File: {result['filename']} -> {result['overall_prediction']} ({result['num_ng_patches']} defects)")
         
