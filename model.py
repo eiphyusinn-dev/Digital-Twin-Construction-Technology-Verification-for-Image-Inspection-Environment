@@ -94,10 +94,12 @@ class ConvNeXtV2(nn.Module):
     """
     def __init__(self, in_chans=3, num_classes=1000, 
                  depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], 
-                 drop_path_rate=0., head_init_scale=1.
+                 drop_path_rate=0., head_init_scale=1.,
+                 use_coordconv=False
                  ):
         super().__init__()
         self.depths = depths
+        self.use_coordconv = use_coordconv
         self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
         stem = nn.Sequential(
             nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
@@ -122,7 +124,10 @@ class ConvNeXtV2(nn.Module):
             cur += depths[i]
 
         self.norm = nn.LayerNorm(dims[-1], eps=1e-6) # final norm layer
-        self.head = nn.Linear(dims[-1], num_classes)
+        
+        # Conditionally set Head input dimension
+        head_in_dim = dims[-1] + 2 if use_coordconv else dims[-1]
+        self.head = nn.Linear(head_in_dim, num_classes)
 
         self.apply(self._init_weights)
         self.head.weight.data.mul_(head_init_scale)
@@ -139,8 +144,18 @@ class ConvNeXtV2(nn.Module):
             x = self.stages[i](x)
         return self.norm(x.mean([-2, -1])) # global average pooling, (N, C, H, W) -> (N, C)
 
-    def forward(self, x):
+    def forward(self, x, coords=None):
         x = self.forward_features(x)
+        
+        if self.use_coordconv and coords is not None:
+            # coords shape: (batch, 2)
+            x = torch.cat([x, coords], dim=1)  # (batch, 1538)
+        elif self.use_coordconv and coords is None:
+            # When CoordConv is enabled but no coords provided, use zeros
+            batch_size = x.size(0)
+            zero_coords = torch.zeros(batch_size, 2, device=x.device, dtype=x.dtype)
+            x = torch.cat([x, zero_coords], dim=1)  # (batch, 1538)
+        
         x = self.head(x)
         return x
 
@@ -194,8 +209,8 @@ def create_model(num_classes: int = 1000, **kwargs) -> ConvNeXtV2:
     # Filter out unsupported arguments
     supported_kwargs = {}
     for key, value in kwargs.items():
-        if key in ['in_chans', 'drop_path_rate', 'head_init_scale']:
+        if key in ['in_chans', 'drop_path_rate', 'head_init_scale', 'use_coordconv']:
             supported_kwargs[key] = value
-        # Ignore unsupported arguments like 'model_name', 'use_coordconv'
+        # Ignore unsupported arguments like 'model_name'
     
     return convnextv2_large(num_classes=num_classes, **supported_kwargs)

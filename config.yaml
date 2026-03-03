@@ -2,17 +2,17 @@
 
 # Dataset Configuration
 dataset:
-  root_dir: "/home/gwm-279/Desktop/tao_experiments/custom_pytorch_pipeline/patch_splitting_utils/patch_dataset_with_bg"
+  root_dir: "patches_dataset/patches_dataset_unmasked"
   train_dir: "train"
   val_dir: "val"
   test_dir: "test"
   input_size: 224
-  batch_size: 8
+  batch_size: 32
   num_workers: 4
   
 # Class Configuration
 classes:
-  names: [] # Use classes.txt (cat, dog)
+  names: [] # Use classes.txt
   num_classes: 2
   class_weights: [1.0, 1.0]  # Weighted loss for imbalance
 
@@ -25,14 +25,14 @@ model:
 
 # Training Configuration
 training:
-  epochs: 10
+  epochs: 50
   learning_rate: 1e-4
   weight_decay: 1e-4
   warmup_epochs: 5
   min_lr: 1e-6
   
   # Preprocessing Features
-  use_bg_masking: false
+  use_bg_masking: true
   use_fda: false
   use_hist_norm: false
 
@@ -49,7 +49,7 @@ training:
     
     # Advanced Augmentations
     mixup:
-      enabled: true
+      enabled: false
       alpha: 0.2
       beta: 0.2
     
@@ -58,7 +58,7 @@ training:
       alpha: 1.0
     
     randaugment:
-      enabled: false
+      enabled: true
       n: 1
       m: 5
     
@@ -108,3 +108,9 @@ fda:
 hardware:
   device: "cuda"
   mixed_precision: true
+
+# CoordConv Configuration
+coordconv:
+  enabled: true          # Set to true to enable CoordConv
+  grid_rows: 41           # Total rows in patch grid 
+  grid_cols: 47           # Total columns in patch grid
