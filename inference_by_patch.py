@@ -104,48 +104,51 @@ class InferenceEngine:
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         model.load_state_dict(state_dict)
         return model
-
+    
     def get_patches(self, img: np.ndarray) -> List[Dict]:
-        """Splits image into patches and keeps track of coordinates and normalized indices."""
-        h, w = img.shape[:2]
-        patches = []
-        
-        y_coords = list(range(0, h - self.patch_size + 1, self.stride))
-        if y_coords[-1] != h - self.patch_size: y_coords.append(h - self.patch_size)
-        x_coords = list(range(0, w - self.patch_size + 1, self.stride))
-        if x_coords[-1] != w - self.patch_size: x_coords.append(w - self.patch_size)
-
-        for r, y in enumerate(y_coords):
-            for c, x in enumerate(x_coords):
-                patch = img[y:y+self.patch_size, x:x+self.patch_size]
-                # Filter out empty/black patches
-                if np.count_nonzero(patch) < (self.patch_size * self.patch_size * 0.1):
-                    continue
+            """
+            Splits image into patches and keeps track of raw pixel coordinates.
+            """
+            h, w = img.shape[:2]
+            patches = []
+            
+            # Calculate coordinate grids
+            y_coords = list(range(0, h - self.patch_size + 1, self.stride))
+            if not y_coords or y_coords[-1] != h - self.patch_size: 
+                y_coords.append(h - self.patch_size)
                 
-                # --- CoordConv Calculation ---
-                row_norm = r / max(self.grid_rows - 1, 1)
-                col_norm = c / max(self.grid_cols - 1, 1)
-                # -----------------------------
+            x_coords = list(range(0, w - self.patch_size + 1, self.stride))
+            if not x_coords or x_coords[-1] != w - self.patch_size: 
+                x_coords.append(w - self.patch_size)
 
-                patches.append({
-                    'img': patch, 
-                    'x': x, 
-                    'y': y, 
-                    'coords': [row_norm, col_norm] # Store normalized coords
-                })
-        return patches
+            for y in y_coords:
+                for x in x_coords:
+                    patch = img[y:y+self.patch_size, x:x+self.patch_size]
+                    
+                    # Filter out empty/black patches
+                    if np.count_nonzero(patch) < (self.patch_size * self.patch_size * 0.1):
+                        continue
+                    
+                    patches.append({
+                        'img': patch, 
+                        'x': x, 
+                        'y': y
+                    })
+            return patches
 
-    def predict_full_image(self, image_path: str,  annotated_dir: str, save_preview: bool = True) -> Dict:
-        """Main prediction method - updated for CoordConv."""
+    def predict_full_image(self, image_path: str, annotated_dir: str, save_preview: bool = True) -> Dict:
+        """
+        Main prediction method updated for Pixel-Based Coordinate Normalization.
+        """
         filename = os.path.basename(image_path)
         original_img_bgr = cv2.imread(image_path)
         if original_img_bgr is None: 
             raise ValueError(f"Could not load {image_path}")
         
-        # Convert to RGB
         img_rgb = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2RGB)
+        h, w = img_rgb.shape[:2]
         
-        # Apply background masking if enabled
+        # 1. Apply background masking if enabled
         if self.use_bg_masking:
             masked_rgb = self._apply_background_masking(img_rgb.copy(), filename)
             if save_preview:
@@ -153,13 +156,18 @@ class InferenceEngine:
             patches = self.get_patches(masked_rgb)
         else:
             patches = self.get_patches(img_rgb)
-        print(f'Total Patches : {len(patches)}')
+            
+        print(f'Total Patches to process: {len(patches)}')
+        
+        # 2. Pre-compute normalization denominators (Pixel-based)
+        max_y = max(h - self.patch_size, 1)
+        max_x = max(w - self.patch_size, 1)
         
         ng_patches = []
         max_ng_confidence = 0.0
         start_time = time.time()
         
-        # Batch process patches
+        # 3. Batch process patches
         batch_size = 16
         for i in range(0, len(patches), batch_size):
             batch_data = patches[i:i+batch_size]
@@ -167,28 +175,34 @@ class InferenceEngine:
             batch_coords = []
             
             for p in batch_data:
+                # Transform image patch
                 transformed = self.transform(image=p['img'])['image']
                 batch_tensors.append(transformed)
+                
+                # Normalize coordinates
                 if self.use_coordconv:
-                    batch_coords.append(torch.tensor(p['coords'], dtype=torch.float32))
+                    row_norm = p['y'] / max_y
+                    col_norm = p['x'] / max_x
+                    batch_coords.append([row_norm, col_norm])
             
             input_batch = torch.stack(batch_tensors).to(self.device)
             
-            # Prepare coord tensor if needed
-            coord_tensor = None
-            if self.use_coordconv:
-                coord_tensor = torch.stack(batch_coords).to(self.device)
+            # 4. Prepare coordinate tensor
+            coords = None
+            if self.use_coordconv and batch_coords:
+                coords = torch.tensor(batch_coords, dtype=torch.float32).to(self.device)
             
             with torch.no_grad():
-                # Pass coords to model if CoordConv is enabled
-                outputs = self.model(input_batch, coords=coord_tensor)
+                # Forward pass with optional coords
+                outputs = self.model(input_batch, coords=coords)
                 probs = F.softmax(outputs, dim=1)
                 
+            # 5. Process results
             for j, prob in enumerate(probs):
-                ng_conf = prob[0].item()  # Probability of 'NG'
+                ng_conf = prob[0].item()  # NG is class 0
                 
                 if ng_conf >= self.threshold:
-                    patch_info = batch_data[j]
+                    patch_info = batch_data[j].copy()
                     patch_info['confidence'] = ng_conf
                     ng_patches.append(patch_info)
                     max_ng_confidence = max(max_ng_confidence, ng_conf)
@@ -196,7 +210,7 @@ class InferenceEngine:
         inference_time = time.time() - start_time
         overall_label = "NG" if len(ng_patches) > 0 else "OK"
         
-        # Create visualization
+        # 6. Create visualization
         vis_path = self._create_visual_result(original_img_bgr, ng_patches, overall_label, image_path, annotated_dir)
 
         return {
@@ -209,7 +223,7 @@ class InferenceEngine:
             'background_masking': self.use_bg_masking,
             'coordconv_enabled': self.use_coordconv
         }
-
+    
     def _save_mask_preview(self, original_rgb: np.ndarray, masked_rgb: np.ndarray, filename: str):
         """Save side-by-side comparison for debugging."""
         prev_dir = Path("inference_previews")
@@ -256,7 +270,7 @@ def main():
     parser.add_argument('--threshold', type=float, help='NG detection threshold')
     parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
     parser.add_argument('--save_preview', action='store_true', help='Save masking comparison previews')
-    parser.add_argument('--annotated_dir', default='inference_results_coordconv_training/annotated_images_bgmask')
+    parser.add_argument('--annotated_dir', default='annotated_dir')
     
     
     args = parser.parse_args()
