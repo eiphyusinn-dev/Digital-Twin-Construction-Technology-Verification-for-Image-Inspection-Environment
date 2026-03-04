@@ -107,32 +107,39 @@ class InferenceEngine:
     
     def get_patches(self, img: np.ndarray) -> List[Dict]:
             """
-            Splits image into patches and keeps track of raw pixel coordinates.
+            Splits image into patches and keeps track of raw pixel coordinates
+            and grid indices for CoordConv normalization.
             """
             h, w = img.shape[:2]
             patches = []
-            
+
             # Calculate coordinate grids
             y_coords = list(range(0, h - self.patch_size + 1, self.stride))
-            if not y_coords or y_coords[-1] != h - self.patch_size: 
+            if not y_coords or y_coords[-1] != h - self.patch_size:
                 y_coords.append(h - self.patch_size)
-                
+
             x_coords = list(range(0, w - self.patch_size + 1, self.stride))
-            if not x_coords or x_coords[-1] != w - self.patch_size: 
+            if not x_coords or x_coords[-1] != w - self.patch_size:
                 x_coords.append(w - self.patch_size)
 
-            for y in y_coords:
-                for x in x_coords:
+            # Store grid dimensions for CoordConv normalization
+            self._grid_rows = len(y_coords)
+            self._grid_cols = len(x_coords)
+
+            for row_idx, y in enumerate(y_coords):
+                for col_idx, x in enumerate(x_coords):
                     patch = img[y:y+self.patch_size, x:x+self.patch_size]
-                    
+
                     # Filter out empty/black patches
                     if np.count_nonzero(patch) < (self.patch_size * self.patch_size * 0.1):
                         continue
-                    
+
                     patches.append({
-                        'img': patch, 
-                        'x': x, 
-                        'y': y
+                        'img': patch,
+                        'x': x,
+                        'y': y,
+                        'row_idx': row_idx,
+                        'col_idx': col_idx
                     })
             return patches
 
@@ -159,9 +166,9 @@ class InferenceEngine:
             
         print(f'Total Patches to process: {len(patches)}')
         
-        # 2. Pre-compute normalization denominators (Pixel-based)
-        max_y = max(h - self.patch_size, 1)
-        max_x = max(w - self.patch_size, 1)
+        # 2. Pre-compute normalization denominators (Grid-index-based, matching training)
+        max_row_idx = max(self._grid_rows - 1, 1)
+        max_col_idx = max(self._grid_cols - 1, 1)
         
         ng_patches = []
         max_ng_confidence = 0.0
@@ -179,10 +186,10 @@ class InferenceEngine:
                 transformed = self.transform(image=p['img'])['image']
                 batch_tensors.append(transformed)
                 
-                # Normalize coordinates
+                # Normalize coordinates using grid indices (same as training)
                 if self.use_coordconv:
-                    row_norm = p['y'] / max_y
-                    col_norm = p['x'] / max_x
+                    row_norm = p['row_idx'] / max_row_idx
+                    col_norm = p['col_idx'] / max_col_idx
                     batch_coords.append([row_norm, col_norm])
             
             input_batch = torch.stack(batch_tensors).to(self.device)
