@@ -147,6 +147,7 @@ annotated_images/
 visualizations/
 results/
 wandb/
+inference_previews/
 
 # Data files
 dataset/
@@ -172,6 +173,13 @@ sample_data/
 reaLimage_cropped_patch/
 inference_results/
 results.json
-dataloader_grid_check/
-checkpoints_patches/
 dataset_splitting_utils/
+patch_splitting_utils_old/
+
+
+annotation_utils/
+coord_training/
+dataloader_grid_check/
+dataset_splitting_utils/
+patches_training/
+sample_data/
