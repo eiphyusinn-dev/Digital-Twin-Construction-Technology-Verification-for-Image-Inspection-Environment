@@ -8,6 +8,7 @@ import argparse
 import json
 import yaml
 import time
+import csv
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
@@ -25,10 +26,12 @@ class InferenceEngine:
                  device: Optional[str] = None,
                  threshold: float = 0.5,
                  patch_size: int = 224,
-                 stride: int = 112):
+                 stride: int = 112,
+                 save_patch_probs: bool = False):
         self.model_config = model_config
         self.full_config = full_config
         self.threshold = threshold
+        self.save_patch_probs = save_patch_probs
         print(f'Inference threshold: {self.threshold}')
         self.patch_size = patch_size
         self.stride = stride
@@ -85,7 +88,8 @@ class InferenceEngine:
         if not self.use_bg_masking:
             return image
         try:
-            if filename.startswith('cg_') and 'cg' in self.bg_masks:
+            # if filename.startswith('cg_') and 'cg' in self.bg_masks:
+            if 'cg' in self.bg_masks:
                 return self.bg_masks['cg'](image=image)['image']
             elif filename.startswith('real_') and 'real' in self.bg_masks:
                 return self.bg_masks['real'](image=image)['image']
@@ -171,6 +175,7 @@ class InferenceEngine:
         max_col_idx = max(self._grid_cols - 1, 1)
         
         ng_patches = []
+        all_patches_data = []  # Store all patch data for CSV export
         max_ng_confidence = 0.0
         start_time = time.time()
         
@@ -208,6 +213,17 @@ class InferenceEngine:
             for j, prob in enumerate(probs):
                 ng_conf = prob[0].item()  # NG is class 0
                 
+                # Store all patch data
+                patch_data = {
+                    'filename': filename,
+                    'row_idx': batch_data[j]['row_idx'],
+                    'col_idx': batch_data[j]['col_idx'],
+                    'x': batch_data[j]['x'],
+                    'y': batch_data[j]['y'],
+                    'ng_probability': ng_conf
+                }
+                all_patches_data.append(patch_data)
+                
                 if ng_conf >= self.threshold:
                     patch_info = batch_data[j].copy()
                     patch_info['confidence'] = ng_conf
@@ -219,6 +235,11 @@ class InferenceEngine:
         
         # 6. Create visualization
         vis_path = self._create_visual_result(original_img_bgr, ng_patches, overall_label, image_path, annotated_dir)
+        
+        # 7. Save patch probabilities to CSV if enabled
+        csv_path = None
+        if self.save_patch_probs:
+            csv_path = self._save_patch_probabilities(all_patches_data, annotated_dir)
 
         return {
             'filename': filename,
@@ -227,6 +248,7 @@ class InferenceEngine:
             'max_confidence': max_ng_confidence if overall_label == "NG" else (1 - max_ng_confidence),
             'inference_time': inference_time,
             'annotated_image': vis_path,
+            'patch_probabilities_csv': csv_path,
             'background_masking': self.use_bg_masking,
             'coordconv_enabled': self.use_coordconv
         }
@@ -267,6 +289,25 @@ class InferenceEngine:
         save_path = os.path.join(annotated_dir, fname)
         cv2.imwrite(save_path, vis_img)
         return save_path
+    
+    def _save_patch_probabilities(self, all_patches_data: List[Dict], annotated_dir: str) -> str:
+        """Save all patch probabilities to CSV file for evaluation."""
+        os.makedirs(f'{annotated_dir}/patch_prob_csv', exist_ok=True)
+        
+        # Generate CSV filename based on the first patch's filename
+        base_filename = all_patches_data[0]['filename'] if all_patches_data else 'unknown'
+        csv_filename = f"patch_probs_{Path(base_filename).stem}.csv"
+        csv_path = os.path.join(annotated_dir,'patch_prob_csv', csv_filename)
+        
+        # Write CSV with headers
+        with open(csv_path, 'w', newline='') as csvfile:
+            fieldnames = ['filename', 'row_idx', 'col_idx', 'x', 'y', 'ng_probability']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(all_patches_data)
+        
+        print(f"Saved patch probabilities to {csv_path}")
+        return csv_path
 
 
 def main():
@@ -277,6 +318,7 @@ def main():
     parser.add_argument('--threshold', type=float, help='NG detection threshold')
     parser.add_argument('--device', default='auto', help='Device: auto, cpu, cuda')
     parser.add_argument('--save_preview', action='store_true', help='Save masking comparison previews')
+    parser.add_argument('--save_patch_probs', action='store_true', help='Save all patch probabilities to CSV')
     parser.add_argument('--annotated_dir', default='annotated_dir')
     
     
@@ -292,7 +334,8 @@ def main():
         model_config=config,
         full_config=config,
         device=device,
-        threshold=args.threshold or config['inference']['threshold']
+        threshold=args.threshold or config['inference']['threshold'],
+        save_patch_probs=args.save_patch_probs
     )
     
     input_path = Path(args.input)
