@@ -157,13 +157,41 @@ class PatchEvaluator:
         for level in ['patch', 'work']:
             res = results[f'{level}_level']
             cm = np.array([[res['tn'], res['fp']], [res['fn'], res['tp']]])
-            plt.figure(figsize=(6, 5))
+            
+            plt.figure(figsize=(7, 6))
             plt.imshow(cm, cmap=plt.cm.Blues)
-            plt.title(f'{level.capitalize()}-level Confusion Matrix (Threshold: {threshold})')
+            plt.title(f'{level.capitalize()}-level Confusion Matrix\n(Threshold: {threshold})', pad=20)
+            
+            # --- FIX: ADD CLASS LABELS ---
+            classes = ['OK', 'NG']
+            tick_marks = np.arange(len(classes))
+            plt.xticks(tick_marks, classes)
+            plt.yticks(tick_marks, classes)
+
+            # --- ADD BORDER AND GRID LINES ---
+            ax = plt.gca()
+            # This adds a solid border around the entire graph
+            for spine in ax.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(2)
+                spine.set_color('black')
+            
+            # This adds the white lines between the OK/NG boxes
+            ax.set_xticks(np.arange(len(classes)) - 0.5, minor=True)
+            ax.set_yticks(np.arange(len(classes)) - 0.5, minor=True)
+            ax.grid(which="minor", color="white", linestyle='-', linewidth=3)
+            ax.tick_params(which="minor", size=0)
+            # ---------------------------------
+
             for i, j in np.ndindex(cm.shape):
-                plt.text(j, i, format(cm[i, j], 'd'), ha="center", va="center", 
-                         color="white" if cm[i, j] > cm.max()/2 else "black")
-            plt.ylabel('True'); plt.xlabel('Pred')
+                plt.text(j, i, format(cm[i, j], 'd'), 
+                         ha="center", va="center", 
+                         color="white" if cm[i, j] > cm.max()/2 else "black",
+                         fontsize=14, fontweight='bold')
+            
+            plt.ylabel('Actual Label (Ground Truth)', fontsize=12)
+            plt.xlabel('Predicted Label (Inference)', fontsize=12)
+            plt.tight_layout()
             plt.savefig(threshold_dir / f'{level}_confusion_matrix.png')
             plt.close()
 
@@ -214,7 +242,7 @@ def main():
     parser.add_argument('--inference_csvs', required=True)
     parser.add_argument('--ground_truth', required=True)
     parser.add_argument('--output_dir', default='evaluation_results')
-    parser.add_argument('--thresholds', nargs='+', type=float, default=[0.5, 0.6, 0.7, 0.8, 0.9])
+    parser.add_argument('--thresholds', nargs='+', type=float, default=[0.5,0.6,0.7,0.8,0.9])
     args = parser.parse_args()
 
     evaluator = PatchEvaluator(threshold=0.7)  # Initial threshold, will be overridden
