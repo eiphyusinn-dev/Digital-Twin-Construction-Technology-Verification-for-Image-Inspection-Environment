@@ -272,12 +272,6 @@ class Trainer:
                 data, targets = data.to(self.device), targets.to(self.device)
                 outputs = self.model(data, coords=coords)
                 loss = self.criterion(outputs, targets)
-
-                if torch.isnan(loss):
-                    print("Detected NaN loss!")
-                    print(f"Logits: {outputs}") 
-                    print(f"Targets: {targets}")
-                    torch.save({'data': data, 'targets': targets}, 'nan_batch.pt')
                 
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
