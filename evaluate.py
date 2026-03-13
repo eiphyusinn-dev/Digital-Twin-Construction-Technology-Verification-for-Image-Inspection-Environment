@@ -208,19 +208,40 @@ class PatchEvaluator:
         inf_data = self.load_inference_csvs(inference_csv_dir)
         gt_data = self.load_ground_truth(ground_truth_dir)
 
+        # Handle empty data
+        if not inf_data:
+            print(f"Error: No valid inference CSVs found in {inference_csv_dir}. Skipping.")
+            return None
+
         p_res = self.evaluate_patches(inf_data, gt_data)
+        if not p_res['all_labels']:
+            print("Error: No overlapping samples found. Check filename matching logic.")
+            return None
+        
         i_res = self.evaluate_images(inf_data, gt_data)
         
-        fpr, tpr, _ = roc_curve(p_res['all_labels'], p_res['all_probs'])
-        roc_auc = auc(fpr, tpr)
+        # --- ROBUST ROC CALCULATION ---
+        try:
+            # Check if we have both classes (0 and 1) present
+            if len(set(p_res['all_labels'])) < 2:
+                raise ValueError("Only one class present in data. ROC AUC needs both OK and NG samples.")
+                
+            fpr, tpr, _ = roc_curve(p_res['all_labels'], p_res['all_probs'])
+            roc_auc = auc(fpr, tpr)
+        except Exception as e:
+            print(f"Warning: ROC calculation skipped: {e}")
+            fpr, tpr, roc_auc = np.array([0, 1]), np.array([0, 0]), 0.0
         
-        results = {'threshold': self.threshold, 'patch_level': p_res['patch_level'], 
-                   'work_level': i_res['work_level'], 'roc_auc': roc_auc}
+        results = {
+            'threshold': self.threshold, 
+            'patch_level': p_res['patch_level'], 
+            'work_level': i_res['work_level'], 
+            'roc_auc': roc_auc
+        }
         
         self.generate_plots(results, {'fpr': fpr, 'tpr': tpr}, output_dir)
         self.create_visual_comparison(inf_data, gt_data, output_dir, self.threshold)
         
-        # Save results in threshold-specific folder
         threshold_dir = Path(output_dir) / f"threshold_{self.threshold}"
         threshold_dir.mkdir(parents=True, exist_ok=True)
         with open(threshold_dir / f'evaluation_results_threshold_{self.threshold}.json', 'w') as f:
@@ -228,7 +249,7 @@ class PatchEvaluator:
         
         self.print_summary(results)
         return results
-
+    
     def print_summary(self, r):
         print("\n" + "="*30 + f"\nRESULTS (Thresh: {r['threshold']})\n" + "="*30)
         for lvl in ['patch_level', 'work_level']:
@@ -242,18 +263,28 @@ def main():
     parser.add_argument('--inference_csvs', required=True)
     parser.add_argument('--ground_truth', required=True)
     parser.add_argument('--output_dir', default='evaluation_results')
-    parser.add_argument('--thresholds', nargs='+', type=float, default=[0.5,0.6,0.7,0.8,0.9])
+    parser.add_argument('--thresholds', nargs='+', type=float, default=[]) # Empty list default
     args = parser.parse_args()
 
-    evaluator = PatchEvaluator(threshold=0.7)  # Initial threshold, will be overridden
+    evaluator = PatchEvaluator()
+    # Use 0.7 if the list is empty
+    threshold_list = args.thresholds if args.thresholds else [0.7]
     
-    if args.thresholds:
-        multi_results = []
-    for t in args.thresholds:
+    multi_results = []
+    
+    for t in threshold_list:
         evaluator.threshold = t
         res = evaluator.evaluate(args.inference_csvs, args.ground_truth, args.output_dir)
-        multi_results.append({'threshold': t, 'work_recall': res['work_level']['recall'], 
-                                 'work_precision': res['work_level']['precision']})
+        
+        # Only append if evaluation was successful
+        if res:
+            multi_results.append({
+                'threshold': t, 
+                'work_recall': res['work_level']['recall'], 
+                'work_precision': res['work_level']['precision']
+            })
+            
+    if multi_results:
         pd.DataFrame(multi_results).to_csv(os.path.join(args.output_dir, 'multi_threshold_results.csv'), index=False)
 
 if __name__ == "__main__":
