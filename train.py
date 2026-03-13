@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from cv2 import data
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -39,6 +41,8 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
+        self.current_epoch = 0
+        self.best_val_acc = 0.0
         
         # Setup device from hardware config
         self.device = torch.device(config['hardware'].get('device', 'cuda'))
@@ -74,7 +78,6 @@ class Trainer:
     
     def _create_optimizer(self) -> optim.Optimizer:
         train_cfg = self.config['training']
-        # Defaulting to AdamW as per your model needs
         return optim.AdamW(
             self.model.parameters(),
             lr=float(train_cfg['learning_rate']),
@@ -94,15 +97,9 @@ class Trainer:
         total_epochs = int(train_cfg['epochs'])
         
         if warmup_epochs > 0:
-            # 1. Linear Warmup Scheduler
             warmup_sched = optim.lr_scheduler.LinearLR(
                 self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
             )
-            
-            # 2. Cosine Annealing Scheduler (for the remaining epochs)
-            # cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
-            #     self.optimizer, T_max=(total_epochs - warmup_epochs), eta_min=float(train_cfg.get('min_lr', 0.0))
-            # )
             cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer, T_max=total_epochs, eta_min=float(train_cfg.get('min_lr', 0.0))
             )
@@ -129,35 +126,72 @@ class Trainer:
         )
         self.logger = logging.getLogger(__name__)
 
+    def save_checkpoint(self, epoch, is_best=False):
+        state = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
+            'best_val_acc': self.best_val_acc,
+            'config': self.config
+        }
+        
+        last_path = os.path.join(self.config['paths']['checkpoint_dir'], 'last_checkpoint.pth')
+        torch.save(state, last_path)
+        
+        if is_best:
+            best_path = os.path.join(self.config['paths']['checkpoint_dir'], 'best_model.pth')
+            torch.save(state, best_path)
+            
+        save_interval = self.config['logging'].get('save_interval', 5)
+        if (epoch + 1) % save_interval == 0:
+            epoch_path = os.path.join(self.config['paths']['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+            torch.save(state, epoch_path)
+
+    def load_checkpoint(self, checkpoint_path):
+        if not os.path.exists(checkpoint_path):
+            self.logger.warning(f"Checkpoint not found at: {checkpoint_path}, starting from scratch.")
+            return
+
+        self.logger.info(f"Resuming training from: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if self.scheduler and checkpoint.get('scheduler_state_dict'):
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            
+        if self.scaler and checkpoint.get('scaler_state_dict'):
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            
+        self.current_epoch = checkpoint['epoch'] + 1 
+        self.best_val_acc = checkpoint.get('best_val_acc', 0.0)
+        self.logger.info(f"Success! Resuming from Epoch {self.current_epoch}")
+
     def train_epoch(self) -> Dict[str, float]:
         self.model.train()
         running_loss, correct, total = 0.0, 0, 0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
         
-        # Check if CoordConv is enabled
         use_coordconv = self.config.get('coordconv', {}).get('enabled', False)
         
         for batch in pbar:
-            # Branch DataLoader unpacking
             if use_coordconv:
                 data, targets, coords = batch
-                data = data.to(self.device)
-                targets = targets.to(self.device)
-                coords = coords.to(self.device)       # (batch, 2)
+                data, targets, coords = data.to(self.device), targets.to(self.device), coords.to(self.device)
             else:
                 data, targets = batch
-                data = data.to(self.device)
-                targets = targets.to(self.device)
+                data, targets = data.to(self.device), targets.to(self.device)
                 coords = None
             
             self.optimizer.zero_grad()
             
-            # Apply MixUp or CutMix
             aug_cfg = self.config['training']['augmentation']
             use_mixup = aug_cfg.get('mixup', {}).get('enabled', False)
             use_cutmix = aug_cfg.get('cutmix', {}).get('enabled', False)
             
-            # Random toggle when both are enabled to use both augmentations
             if use_mixup and use_cutmix:
                 if np.random.rand() < 0.5:
                     data, targets_a, targets_b, lam, mixed_coords = self.apply_mixup(data, targets, coords)
@@ -179,12 +213,9 @@ class Trainer:
             if self.scaler:
                 with autocast('cuda'):
                     outputs = self.model(data, coords=mixed_coords)
-                    if is_mixed:
-                        loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
-                    else:
-                        loss = self.criterion(outputs, targets)
+                    loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam) if is_mixed else self.criterion(outputs, targets)
+                
                 self.scaler.scale(loss).backward()
-                # Optional: Gradient Clipping
                 if self.config['training'].get('gradient_clip'):
                     self.scaler.unscale_(self.optimizer)
                     nn.utils.clip_grad_norm_(self.model.parameters(), self.config['training']['gradient_clip'])
@@ -192,39 +223,29 @@ class Trainer:
                 self.scaler.update()
             else:
                 outputs = self.model(data, coords=mixed_coords)
-                if is_mixed:
-                    loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
-                else:
-                    loss = self.criterion(outputs, targets)
+                loss = self.mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam) if is_mixed else self.criterion(outputs, targets)
                 loss.backward()
-                # Optional: Gradient Clipping for non-AMP path
                 if self.config['training'].get('gradient_clip'):
                     nn.utils.clip_grad_norm_(self.model.parameters(), self.config['training']['gradient_clip'])
                 self.optimizer.step()
             
-            # Check for NaN loss and handle it
             if torch.isnan(loss) or torch.isinf(loss):
-                print(f"Warning: NaN/Inf loss detected at epoch {self.current_epoch}")
-                print("Skipping this batch and continuing...")
                 continue
             
             running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            batch_size = targets_a.size(0) if is_mixed else targets.size(0)
+            total += batch_size
+            correct += predicted.eq(targets_a if is_mixed else targets).sum().item()
             
-            # For mixed samples, use the first target for accuracy calculation
-            if is_mixed:
-                _, predicted = outputs.max(1)
-                total += targets_a.size(0)
-                correct += predicted.eq(targets_a).sum().item()
-            else:
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+            # SAFE PROGRESS BAR (Prevents div by zero if first batch fails)
+            if total > 0:
+                pbar.set_postfix({'Loss': f'{running_loss/total:.4f}', 'Acc': f'{100.*correct/total:.2f}%'})
             
-            pbar.set_postfix({'Loss': f'{running_loss/total:.4f}', 'Acc': f'{100.*correct/total:.2f}%'})
-            
-        # Log to TensorBoard
-        epoch_loss = running_loss / len(self.train_loader)
-        epoch_acc = 100. * correct / total
+        # SAFE EPOCH METRICS
+        epoch_loss = running_loss / len(self.train_loader) if len(self.train_loader) > 0 else 0.0
+        epoch_acc = 100. * correct / total if total > 0 else 0.0
+        
         if self.writer:
             self.writer.add_scalar('Train/Loss', epoch_loss, self.current_epoch)
             self.writer.add_scalar('Train/Accuracy', epoch_acc, self.current_epoch)
@@ -236,16 +257,11 @@ class Trainer:
     def validate(self) -> Dict[str, float]:
         self.model.eval()
         running_loss, correct, total = 0.0, 0, 0
-        
-        # Initialize confusion matrix elements for recall calculation
         tp, fp, tn, fn = 0, 0, 0, 0
-        
-        # Check if CoordConv is enabled
         use_coordconv = self.config.get('coordconv', {}).get('enabled', False)
         
         with torch.no_grad():
             for batch in self.val_loader:
-                # Branch DataLoader unpacking
                 if use_coordconv:
                     data, targets, coords = batch
                     coords = coords.to(self.device)
@@ -256,39 +272,32 @@ class Trainer:
                 data, targets = data.to(self.device), targets.to(self.device)
                 outputs = self.model(data, coords=coords)
                 loss = self.criterion(outputs, targets)
+
+                if torch.isnan(loss):
+                    print("Detected NaN loss!")
+                    print(f"Logits: {outputs}") 
+                    print(f"Targets: {targets}")
+                    torch.save({'data': data, 'targets': targets}, 'nan_batch.pt')
+                
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
                 
-                # Calculate confusion matrix elements (NG=class 0, OK=class 1)
                 for i in range(targets.size(0)):
-                    actual = targets[i].item()
-                    pred = predicted[i].item()
-                    
-                    if actual == 0 and pred == 0:  # Actual NG, Predicted NG
-                        tp += 1
-                    elif actual == 1 and pred == 0:  # Actual OK, Predicted NG
-                        fp += 1
-                    elif actual == 1 and pred == 1:  # Actual OK, Predicted OK
-                        tn += 1
-                    elif actual == 0 and pred == 1:  # Actual NG, Predicted OK
-                        fn += 1
+                    actual, pred = targets[i].item(), predicted[i].item()
+                    if actual == 0 and pred == 0: tp += 1
+                    elif actual == 1 and pred == 0: fp += 1
+                    elif actual == 1 and pred == 1: tn += 1
+                    elif actual == 0 and pred == 1: fn += 1
         
-        # Calculate metrics
-        val_loss = running_loss / len(self.val_loader)
-        val_acc = 100. * correct / total
-        
-        # Calculate recall (sensitivity) for NG class
+        # SAFE METRIC CALCULATIONS
+        val_loss = running_loss / len(self.val_loader) if len(self.val_loader) > 0 else 0.0
+        val_acc = 100. * correct / total if total > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        
-        # Calculate precision for NG class
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        
-        # Calculate F1-score for NG class
         f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
         
-        # Log to TensorBoard
         if self.writer:
             self.writer.add_scalar('Val/Loss', val_loss, self.current_epoch)
             self.writer.add_scalar('Val/Accuracy', val_acc, self.current_epoch)
@@ -297,195 +306,111 @@ class Trainer:
             self.writer.add_scalar('Val/F1_NG', f1_score, self.current_epoch)
         
         return {
-            'loss': val_loss, 
-            'accuracy': val_acc,
-            'recall_ng': recall,
-            'precision_ng': precision,
-            'f1_ng': f1_score
+            'loss': val_loss, 'accuracy': val_acc,
+            'recall_ng': recall, 'precision_ng': precision, 'f1_ng': f1_score
         }
 
     def train(self):
         epochs = self.config['training']['epochs']
         eval_interval = self.config['logging'].get('eval_interval', 1)
         
-        for epoch in range(epochs):
+        for epoch in range(self.current_epoch, epochs):
             self.current_epoch = epoch
             train_m = self.train_epoch()
+            
             if self.scheduler: 
                 self.scheduler.step()
                 current_lr = self.scheduler.get_last_lr()[0]
                 self.logger.info(f"Epoch {epoch+1}: LR updated to {current_lr:.6f}")
             
-            # Validate only at specified intervals
             if (epoch + 1) % eval_interval == 0:
                 val_m = self.validate()
-                
                 self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f} Recall: {val_m['recall_ng']:.4f}")
                 
-                # Save checkpoint at intervals
-                save_interval = self.config['logging'].get('save_interval', 5)
-                if (epoch + 1) % save_interval == 0:
-                    checkpoint_path = os.path.join(self.config['paths']['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-                    torch.save(self.model.state_dict(), checkpoint_path)
-                    self.logger.info(f"Checkpoint saved: {checkpoint_path}")
-                
-                # Save best model
-                if val_m['accuracy'] > self.best_val_acc:
+                is_best = val_m['accuracy'] > self.best_val_acc
+                if is_best:
                     self.best_val_acc = val_m['accuracy']
-                    torch.save(self.model.state_dict(), os.path.join(self.config['paths']['checkpoint_dir'], 'best_model.pth'))
+                
+                self.save_checkpoint(epoch, is_best=is_best)
             else:
-                # Still log training progress even without validation
-                self.logger.info(f"Epoch {epoch+1} | Training only (eval_interval: {eval_interval})")
+                self.logger.info(f"Epoch {epoch+1} | Training only")
         
-        # Close TensorBoard writer
-        if self.writer:
-            self.writer.close()
-            print(f"TensorBoard logs saved to: {self.writer.log_dir}")
+        if self.writer: self.writer.close()
         print(f"Training completed. Best validation accuracy: {self.best_val_acc:.2f}%")
     
     def close(self):
-        """Close TensorBoard writer manually if needed."""
-        if hasattr(self, 'writer') and self.writer:
-            self.writer.close()
+        if hasattr(self, 'writer') and self.writer: self.writer.close()
     
     def apply_mixup(self, data, targets, coords=None):
-        """Apply MixUp augmentation to batch."""
         aug_cfg = self.config['training']['augmentation']
         mixup_cfg = aug_cfg.get('mixup', {})
+        if not mixup_cfg.get('enabled', False): return data, targets, None
         
-        if not mixup_cfg.get('enabled', False):
-            return data, targets, None
-        
-        alpha = mixup_cfg.get('alpha', 0.2)
-        beta = mixup_cfg.get('beta', 0.2)
-        
-        # Generate mixing parameter
-        lam = np.random.beta(alpha, beta)
-        lam = np.clip(lam, 0.7, 0.95)  # 70-95% original, 5-30% second
-        
-        # Random shuffle indices
+        alpha, beta = mixup_cfg.get('alpha', 0.2), mixup_cfg.get('beta', 0.2)
+        lam = np.clip(np.random.beta(alpha, beta), 0.7, 0.95)
         index = torch.randperm(data.size(0)).to(self.device)
         
-        # Mix data
         mixed_data = lam * data + (1 - lam) * data[index]
-        
-        # Create targets for mixed samples
-        targets_a, targets_b = targets, targets[index]
-        
-        # Blend coordinates with the same ratio
-        mixed_coords = None
-        if coords is not None:
-            mixed_coords = lam * coords + (1 - lam) * coords[index]
-        
-        return mixed_data, targets_a, targets_b, lam, mixed_coords
+        mixed_coords = lam * coords + (1 - lam) * coords[index] if coords is not None else None
+        return mixed_data, targets, targets[index], lam, mixed_coords
     
     def apply_cutmix(self, data, targets, coords=None):
-        """Apply CutMix augmentation to batch."""
         aug_cfg = self.config['training']['augmentation']
         cutmix_cfg = aug_cfg.get('cutmix', {})
+        if not cutmix_cfg.get('enabled', False): return data, targets, None
         
-        if not cutmix_cfg.get('enabled', False):
-            return data, targets, None
-        
-        alpha = cutmix_cfg.get('alpha', 1.0)
-        
-        # Generate mixing parameter
-        lam = np.random.beta(alpha, alpha)
-        
-        # Random shuffle indices
+        lam = np.random.beta(cutmix_cfg.get('alpha', 1.0), cutmix_cfg.get('alpha', 1.0))
         index = torch.randperm(data.size(0)).to(self.device)
-        
-        # Generate random bounding box
         bbx1, bby1, bbx2, bby2 = self.rand_bbox(data.size(), lam)
         
-        # Apply CutMix
         data[:, :, bbx1:bbx2, bby1:bby2] = data[index, :, bbx1:bbx2, bby1:bby2]
-        
-        # Adjust lambda based on actual area
         lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (data.size()[-1] * data.size()[-2]))
-        
-        # Create targets for mixed samples
-        targets_a, targets_b = targets, targets[index]
-        
-        # Blend coordinates by area ratio
-        mixed_coords = None
-        if coords is not None:
-            mixed_coords = lam * coords + (1 - lam) * coords[index]
-        
-        return data, targets_a, targets_b, lam, mixed_coords
+        mixed_coords = lam * coords + (1 - lam) * coords[index] if coords is not None else None
+        return data, targets, targets[index], lam, mixed_coords
     
     def rand_bbox(self, size, lam):
-        """Generate random bounding box for CutMix."""
-        W = size[2]
-        H = size[3]
+        W, H = size[2], size[3]
         cut_rat = np.sqrt(1. - lam)
-        cut_w = int(W * cut_rat)
-        cut_h = int(H * cut_rat)
-        
-        # Uniform
-        cx = np.random.randint(W)
-        cy = np.random.randint(H)
-        
-        bbx1 = np.clip(cx - cut_w // 2, 0, W)
-        bby1 = np.clip(cy - cut_h // 2, 0, H)
-        bbx2 = np.clip(cx + cut_w // 2, 0, W)
-        bby2 = np.clip(cy + cut_h // 2, 0, H)
-        
-        return bbx1, bby1, bbx2, bby2
+        cut_w, cut_h = int(W * cut_rat), int(H * cut_rat)
+        cx, cy = np.random.randint(W), np.random.randint(H)
+        return np.clip(cx - cut_w // 2, 0, W), np.clip(cy - cut_h // 2, 0, H), \
+               np.clip(cx + cut_w // 2, 0, W), np.clip(cy + cut_h // 2, 0, H)
     
     def mixup_criterion(self, criterion, pred, y_a, y_b, lam):
-        """Loss function for MixUp/CutMix."""
         return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 def main():
-    with open('config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-
+    with open('config.yaml', 'r') as f: config = yaml.safe_load(f)
     model = create_model(
-        model_name=config['model']['name'],
-        num_classes=config['classes']['num_classes'],
-        in_chans=config['model']['in_chans'],
-        drop_path_rate=config['model']['drop_path_rate'],
+        model_name=config['model']['name'], num_classes=config['classes']['num_classes'],
+        in_chans=config['model']['in_chans'], drop_path_rate=config['model']['drop_path_rate'],
         use_coordconv=config.get('coordconv', {}).get('enabled', False)
     )
-
-    tao_path = Path(config['paths']['tao_weights']).expanduser().resolve()
-
+    
     if config['model']['pretrained']:
-        print(f"Checking TAO path: {tao_path}")
-        if not tao_path.exists():
-            print(f"[ERROR] TAO weight file not found: {tao_path}")
-        else:
+        tao_path = Path(config['paths']['tao_weights']).expanduser().resolve()
+        if tao_path.exists():
             try:
-                print(f"Loading TAO weights from {tao_path}")
                 tao_dict = torch.load(tao_path, map_location='cpu')
-
-                if isinstance(tao_dict, dict) and 'state_dict' in tao_dict:
-                    tao_weights = tao_dict['state_dict']
-                else:
-                    tao_weights = tao_dict
-
-                loaded, missing = model.load_tao_weights(tao_weights)
-
-                print(f"Loaded {loaded} weights from TAO checkpoint")
-                print(f"Missing keys: {missing}")
-
-            except Exception as e:
-                print(f"[ERROR] Failed to load TAO weights.")
-                print(f"Reason: {e}")
-    else:
-        print("Model pretrained flag is False")
-       
+                tao_weights = tao_dict['state_dict'] if isinstance(tao_dict, dict) and 'state_dict' in tao_dict else tao_dict
+                model.load_tao_weights(tao_weights)
+            except Exception as e: print(f"Load error: {e}")
 
     if config['training'].get('freeze_backbone'):
         for name, param in model.named_parameters():
             if 'head' not in name: param.requires_grad = False
 
-    # 3. Data Loaders
     train_loader, val_loader = get_dataloaders(config)
-
-    # 4. Run Training
     trainer = Trainer(model, train_loader, val_loader, config)
+    should_resume = config['training'].get('resume', False)
+    resume_path = config['training'].get('resume_path', "")
+
+    if should_resume:
+        if not resume_path:
+            resume_path = os.path.join(config['paths']['checkpoint_dir'], 'last_checkpoint.pth')
+        
+        trainer.load_checkpoint(resume_path)
+
     trainer.train()
 
 if __name__ == '__main__':
