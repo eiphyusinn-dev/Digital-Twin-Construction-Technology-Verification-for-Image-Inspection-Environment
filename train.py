@@ -197,7 +197,16 @@ class Trainer:
                 else:
                     loss = self.criterion(outputs, targets)
                 loss.backward()
+                # Optional: Gradient Clipping for non-AMP path
+                if self.config['training'].get('gradient_clip'):
+                    nn.utils.clip_grad_norm_(self.model.parameters(), self.config['training']['gradient_clip'])
                 self.optimizer.step()
+            
+            # Check for NaN loss and handle it
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"Warning: NaN/Inf loss detected at epoch {self.current_epoch}")
+                print("Skipping this batch and continuing...")
+                continue
             
             running_loss += loss.item()
             
@@ -228,6 +237,9 @@ class Trainer:
         self.model.eval()
         running_loss, correct, total = 0.0, 0, 0
         
+        # Initialize confusion matrix elements for recall calculation
+        tp, fp, tn, fn = 0, 0, 0, 0
+        
         # Check if CoordConv is enabled
         use_coordconv = self.config.get('coordconv', {}).get('enabled', False)
         
@@ -248,15 +260,49 @@ class Trainer:
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                
+                # Calculate confusion matrix elements (NG=class 0, OK=class 1)
+                for i in range(targets.size(0)):
+                    actual = targets[i].item()
+                    pred = predicted[i].item()
+                    
+                    if actual == 0 and pred == 0:  # Actual NG, Predicted NG
+                        tp += 1
+                    elif actual == 1 and pred == 0:  # Actual OK, Predicted NG
+                        fp += 1
+                    elif actual == 1 and pred == 1:  # Actual OK, Predicted OK
+                        tn += 1
+                    elif actual == 0 and pred == 1:  # Actual NG, Predicted OK
+                        fn += 1
         
-        # Log to TensorBoard
+        # Calculate metrics
         val_loss = running_loss / len(self.val_loader)
         val_acc = 100. * correct / total
+        
+        # Calculate recall (sensitivity) for NG class
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        
+        # Calculate precision for NG class
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        
+        # Calculate F1-score for NG class
+        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        # Log to TensorBoard
         if self.writer:
             self.writer.add_scalar('Val/Loss', val_loss, self.current_epoch)
             self.writer.add_scalar('Val/Accuracy', val_acc, self.current_epoch)
+            self.writer.add_scalar('Val/Recall_NG', recall, self.current_epoch)
+            self.writer.add_scalar('Val/Precision_NG', precision, self.current_epoch)
+            self.writer.add_scalar('Val/F1_NG', f1_score, self.current_epoch)
         
-        return {'loss': val_loss, 'accuracy': val_acc}
+        return {
+            'loss': val_loss, 
+            'accuracy': val_acc,
+            'recall_ng': recall,
+            'precision_ng': precision,
+            'f1_ng': f1_score
+        }
 
     def train(self):
         epochs = self.config['training']['epochs']
@@ -274,7 +320,7 @@ class Trainer:
             if (epoch + 1) % eval_interval == 0:
                 val_m = self.validate()
                 
-                self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f}")
+                self.logger.info(f"Epoch {epoch+1} | Val Acc: {val_m['accuracy']:.2f}% | Val Loss: {val_m['loss']:.4f} Recall: {val_m['recall_ng']:.4f}")
                 
                 # Save checkpoint at intervals
                 save_interval = self.config['logging'].get('save_interval', 5)
