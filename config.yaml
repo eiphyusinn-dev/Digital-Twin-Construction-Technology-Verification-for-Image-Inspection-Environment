@@ -2,7 +2,7 @@
 
 # Dataset Configuration
 dataset:
-  root_dir: "patches_dataset/patches_dataset_unmasked"
+  root_dir: "dataset_fda_005"
   train_dir: "train"
   val_dir: "val"
   test_dir: "test"
@@ -20,16 +20,18 @@ classes:
 model:
   name: "convnextv2_large"
   pretrained: True
-  drop_path_rate: 0.1
+  drop_path_rate: 0.0
   in_chans: 3
 
 # Training Configuration
 training:
   epochs: 50
-  learning_rate: 1e-4
+  learning_rate: 1e-4 
   weight_decay: 1e-4
   warmup_epochs: 5
   min_lr: 1e-6
+  resume: True
+  resume_path: "checkpoints/checkpoint_epoch_20.pth"
   
   # Preprocessing Features
   use_bg_masking: true
@@ -73,7 +75,7 @@ training:
   # Training Options
   freeze_backbone: True
   use_amp: true
-  gradient_clip: 1.0
+  gradient_clip: 5.0
   
 # Inference Configuration
 inference:
@@ -81,7 +83,7 @@ inference:
   
 # Paths Configuration
 paths:
-  tao_weights: "../pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
+  tao_weights: "pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
   output_dir: "outputs"
   log_dir: "logs"
   checkpoint_dir: "checkpoints"
@@ -111,6 +113,6 @@ hardware:
 
 # CoordConv Configuration
 coordconv:
-  enabled: true          # Set to true to enable CoordConv
+  enabled: true        # Set to true to enable CoordConv
   grid_rows: 41           # Total rows in patch grid 
-  grid_cols: 47           # Total columns in patch grid
+  grid_cols: 47           # Total columns in patch grid1
