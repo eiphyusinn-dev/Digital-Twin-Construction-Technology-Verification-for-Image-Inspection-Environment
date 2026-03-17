@@ -20,10 +20,21 @@ import yaml
 import time
 
 # Add parent directory to path to find utils module
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+sys.path.append(script_dir)
+sys.path.append(parent_dir)
 
 # Import preprocessing modules
-from utils.preprocessing import HistogramNormalization, FDATransform
+try:
+    from utils.fda_utils import FDA_source_to_target_np
+    from utils.preprocessing import HistogramNormalization, FDATransform
+except ImportError as e:
+    print(f"Error importing utils: {e}")
+    print(f"Script directory: {script_dir}")
+    print(f"Parent directory: {parent_dir}")
+    print(f"Available paths: {sys.path}")
+    sys.exit(1)
 
 
 class BackgroundMasking:
@@ -168,135 +179,37 @@ class RandomPatchExtractor:
         
         # FDA
         fda_config = preprocessing_config.get('fda', {})
-        self.fda_transform = None
+        self.fda_enabled = False
         self.fda_mode = fda_config.get('mode', 'crop_first')
-        
+        self.fda_beta = fda_config.get('beta_limit', 0.001)
+        self.fda_reference_fullsize = None
+
         if fda_config.get('enabled', False):
             reference_path = fda_config.get('reference_path')
             if reference_path and os.path.exists(reference_path):
                 try:
-                    self.fda_transform = FDATransform(
-                        reference_images_path=reference_path,
-                        beta_limit=fda_config.get('beta_limit', 0.1),
-                        always_apply=True
-                    )
-                    print(f"FDA: Enabled ({self.fda_mode}) with reference: {reference_path}")
+                    ref_img = cv2.imread(reference_path)
+                    self.fda_reference_fullsize = cv2.cvtColor(ref_img, cv2.COLOR_BGR2RGB)
+                    self.fda_enabled = True
+                    print(f"FDA: Enabled ({self.fda_mode}) with reference: {reference_path} "
+                          f"({ref_img.shape[1]}x{ref_img.shape[0]})")
                 except Exception as e:
-                    print(f"Warning: Could not initialize FDA: {e}")
-                    self.fda_transform = None
+                    print(f"Warning: Could not load FDA reference: {e}")
             else:
                 print(f"FDA enabled but reference path not found: {reference_path}, disabling FDA")
         else:
             print("FDA: Disabled")
-
-    #  def _apply_preprocessing_crop_first(self, image: np.ndarray, image_id: str = "debug") -> Tuple[np.ndarray, np.ndarray]:
-    #     """Apply preprocessing in crop_first mode: crop to product -> normalize -> restore to black background."""
-    #     processed_image = image.copy()
-    #     h, w = image.shape[:2]
-        
-    #     # Create debug directory
-    #     debug_dir = "debug_preprocessing"
-    #     os.makedirs(debug_dir, exist_ok=True)
-        
-    #     # Get background mask first
-    #     bg_mask = None
-    #     if self.bg_masking:
-    #         bg_mask = self.bg_masking.get_mask(h, w)
-        
-    #     # DEBUG: Save original image
-    #     cv2.imwrite(f"{debug_dir}/{image_id}_01_original.png", cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
-    #     if bg_mask is not None:
-    #         cv2.imwrite(f"{debug_dir}/{image_id}_01_bg_mask.png", bg_mask)
-        
-    #     # STEP 1: Crop to product area (remove black background)
-    #     if bg_mask is not None:
-    #         # Find bounding box of product area
-    #         coords = cv2.findNonZero(bg_mask)
-    #         if coords is not None:
-    #             x, y, w_crop, h_crop = cv2.boundingRect(coords)
-                
-    #             # Crop to product area only
-    #             cropped_image = processed_image[y:y+h_crop, x:x+w_crop]
-    #             cropped_mask = bg_mask[y:y+h_crop, x:x+w_crop]
-                
-    #             print(f"    Cropped to product area: {w_crop}x{h_crop} (from {w}x{h})")
-                
-    #             # DEBUG: Save cropped product area
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_02_cropped_product.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_02_cropped_mask.png", cropped_mask)
-                
-    #             # DEBUG: Draw bounding box on original for visualization
-    #             debug_original = processed_image.copy()
-    #             cv2.rectangle(debug_original, (x, y), (x + w_crop, y + h_crop), (255, 0, 0), 2)
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_01_original_with_bbox.png", cv2.cvtColor(debug_original, cv2.COLOR_RGB2BGR))
-    #         else:
-    #             # Fallback: use whole image if no product found
-    #             cropped_image = processed_image
-    #             cropped_mask = bg_mask
-    #             print("    Warning: No product area found, using whole image")
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_02_fallback_full_image.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-    #     else:
-    #         # No background mask, use whole image
-    #         cropped_image = processed_image
-    #         cropped_mask = None
-    #         print("    No background mask, using whole image")
-    #         cv2.imwrite(f"{debug_dir}/{image_id}_02_no_mask_full_image.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-        
-    #     # STEP 2: Apply histogram normalization to cropped product area only
-    #     if self.hist_norm and self.hist_norm_mode == 'crop_first':
-    #         try:
-    #             # DEBUG: Save before histogram normalization
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_03_before_hist_norm.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-                
-    #             cropped_image = self.hist_norm(image=cropped_image)['image']
-    #             print("    Applied histogram normalization to cropped product area")
-                
-    #             # DEBUG: Save after histogram normalization
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_03_after_hist_norm.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-    #         except Exception as e:
-    #             print(f"    Warning: Histogram normalization failed: {e}")
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_03_hist_norm_error.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-        
-    #     # STEP 3: Apply FDA to cropped product area only
-    #     if self.fda_transform and self.fda_mode == 'crop_first':
-    #         try:
-    #             # DEBUG: Save before FDA
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_04_before_fda.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-                
-    #             cropped_image = self.fda_transform(image=cropped_image)['image']
-    #             print("    Applied FDA to cropped product area")
-                
-    #             # DEBUG: Save after FDA
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_04_after_fda.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-    #         except Exception as e:
-    #             print(f"    Warning: FDA failed: {e}")
-    #             cv2.imwrite(f"{debug_dir}/{image_id}_04_fda_error.png", cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-        
-    #     # STEP 4: Restore normalized product area back to original black background
-    #     if bg_mask is not None and 'x' in locals():
-    #         # Create final image with black background
-    #         final_image = np.zeros_like(processed_image)
-            
-    #         # Put processed product area back in original position
-    #         final_image[y:y+h_crop, x:x+w_crop] = cropped_image
-            
-    #         # Apply background mask to ensure clean edges
-    #         final_mask = np.zeros_like(bg_mask)
-    #         final_mask[y:y+h_crop, x:x+w_crop] = cropped_mask
-    #         final_image = cv2.bitwise_and(final_image, final_image, mask=final_mask)
-            
-    #         print("    Restored processed product area to black background")
-            
-    #         # DEBUG: Save final restored image
-    #         cv2.imwrite(f"{debug_dir}/{image_id}_05_final_restored.png", cv2.cvtColor(final_image, cv2.COLOR_RGB2BGR))
-    #         cv2.imwrite(f"{debug_dir}/{image_id}_05_final_mask.png", final_mask)
-            
-    #         return final_image, bg_mask
-    #     else:
-    #         # No cropping was done, return processed image as-is
-    #         cv2.imwrite(f"{debug_dir}/{image_id}_05_no_crop_final.png", cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR))
-    #         return processed_image, bg_mask
     
+    def _apply_fda(self, src_image: np.ndarray, ref_image: np.ndarray) -> np.ndarray:
+        """Apply FDA: transfer low-frequency style from ref_image to src_image.
+
+        Both images must be RGB uint8 with the same dimensions.
+        """
+        src = src_image.astype(np.float32).transpose(2, 0, 1) / 255.0
+        trg = ref_image.astype(np.float32).transpose(2, 0, 1) / 255.0
+        result = FDA_source_to_target_np(src, trg, L=self.fda_beta)
+        return np.clip(result.transpose(1, 2, 0) * 255, 0, 255).astype(np.uint8)
+
     def _apply_preprocessing_crop_first(self, image: np.ndarray, image_id: str = "debug") -> Tuple[np.ndarray, np.ndarray]:
         """Apply preprocessing in crop_first mode: crop to product -> normalize -> restore to black background."""
         processed_image = image.copy()
@@ -332,21 +245,31 @@ class RandomPatchExtractor:
             print("    No background mask, using whole image")
             x, y, w_crop, h_crop = 0, 0, w, h
         
-        # STEP 2: Apply histogram normalization to cropped product area only
+        # STEP 2: Apply FDA with coordinate-matched Real reference
+        if self.fda_enabled and self.fda_mode == 'crop_first' and self.fda_reference_fullsize is not None:
+            try:
+                # Apply same mask + crop to Real reference image
+                ref_h, ref_w = self.fda_reference_fullsize.shape[:2]
+                if self.bg_masking:
+                    ref_mask = self.bg_masking.get_mask(ref_h, ref_w)
+                    ref_masked = cv2.bitwise_and(
+                        self.fda_reference_fullsize, self.fda_reference_fullsize, mask=ref_mask)
+                    ref_cropped = ref_masked[y:y+h_crop, x:x+w_crop]
+                else:
+                    ref_cropped = self.fda_reference_fullsize[y:y+h_crop, x:x+w_crop]
+
+                cropped_image = self._apply_fda(cropped_image, ref_cropped)
+                print("    Applied FDA (crop-matched) to cropped product area")
+            except Exception as e:
+                print(f"    Warning: FDA failed: {e}")
+
+        # STEP 3: Apply histogram normalization to cropped product area only
         if self.hist_norm and self.hist_norm_mode == 'crop_first':
             try:
                 cropped_image = self.hist_norm(image=cropped_image)['image']
                 print("    Applied histogram normalization to cropped product area")
             except Exception as e:
                 print(f"    Warning: Histogram normalization failed: {e}")
-        
-        # STEP 3: Apply FDA to cropped product area only
-        if self.fda_transform and self.fda_mode == 'crop_first':
-            try:
-                cropped_image = self.fda_transform(image=cropped_image)['image']
-                print("    Applied FDA to cropped product area")
-            except Exception as e:
-                print(f"    Warning: FDA failed: {e}")
         
         # STEP 4: Restore normalized product area back to original black background
         if bg_mask is not None:
@@ -367,29 +290,36 @@ class RandomPatchExtractor:
             # No cropping was done, return processed image as-is
             return processed_image, bg_mask
     
-    def _apply_preprocessing_patch_first(self, patch: np.ndarray) -> np.ndarray:
-        """Apply preprocessing in patch_first mode: preprocess individual patch."""
+    def _apply_preprocessing_patch_first(self, patch: np.ndarray, x: int = 0, y: int = 0) -> np.ndarray:
+        """Apply preprocessing in patch_first mode: preprocess individual patch.
+
+        Args:
+            patch: Source CG patch (RGB, uint8)
+            x, y: Patch coordinates in the original full-size image (for FDA coordinate matching)
+        """
         processed_patch = patch.copy()
-        
+
+        # Apply FDA with coordinate-matched Real reference patch
+        if self.fda_enabled and self.fda_mode == 'patch_first' and self.fda_reference_fullsize is not None:
+            try:
+                # Extract Real patch at same coordinates
+                ref_patch = self.fda_reference_fullsize[y:y+self.patch_size, x:x+self.patch_size]
+                processed_patch = self._apply_fda(processed_patch, ref_patch)
+            except Exception as e:
+                print(f"    Warning: FDA failed: {e}")
+
         # Apply histogram normalization
         if self.hist_norm and self.hist_norm_mode == 'patch_first':
             try:
                 processed_patch = self.hist_norm(image=processed_patch)['image']
             except Exception as e:
                 print(f"    Warning: Histogram normalization failed: {e}")
-        
-        # Apply FDA
-        if self.fda_transform and self.fda_mode == 'patch_first':
-            try:
-                processed_patch = self.fda_transform(image=processed_patch)['image']
-            except Exception as e:
-                print(f"    Warning: FDA failed: {e}")
-        
+
         return processed_patch
     
     def _extract_patch(self, image: np.ndarray, x: int, y: int) -> np.ndarray:
-        """Extract patch at specified coordinates."""
-        return image[y:y+self.patch_size, x:x+self.patch_size].copy()
+        """Extract patch from image at given coordinates."""
+        return image[y:y+self.patch_size, x:x+self.patch_size]
     
     def _calculate_work_area_ratio(self, mask: np.ndarray, x: int, y: int) -> float:
         """Calculate ratio of non-black pixels in patch region."""
@@ -460,7 +390,7 @@ class RandomPatchExtractor:
             
             # Apply preprocessing if patch_first mode
             if self.hist_norm_mode == 'patch_first' or self.fda_mode == 'patch_first':
-                patch = self._apply_preprocessing_patch_first(patch)
+                patch = self._apply_preprocessing_patch_first(patch, x, y)
             
             # Generate filename
             filename = f"cg_ok_rnd{len(ok_patches)+1:05d}_OK.png"
@@ -592,7 +522,7 @@ class RandomPatchExtractor:
                 
                 # Apply preprocessing if patch_first mode
                 if self.hist_norm_mode == 'patch_first' or self.fda_mode == 'patch_first':
-                    patch = self._apply_preprocessing_patch_first(patch)
+                    patch = self._apply_preprocessing_patch_first(patch, patch_x, patch_y)
                 
                 # Generate filename
                 filename = f"cg_{image_id}_rnd{len(ng_patches)+1:02d}_NG.png"

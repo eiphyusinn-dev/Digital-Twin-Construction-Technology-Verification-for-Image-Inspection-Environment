@@ -173,7 +173,7 @@ random_patch:
      enabled: false
      mode: "crop_first"          # "crop_first" or "patch_first"
      beta_limit : 0.001
-     reference_path: "reaLimage_cropped_patch/5_7000_25.png"          # Path to FDA reference image (if enabled)
+     reference_path: "input/real_image/13_2_15.png"          # Path to FDA reference image (if enabled)
 
 
  # Output
@@ -195,5 +195,3 @@ defect_colors:
      - name: "uncertain_defect"    # Uncertain defect
        bgr: [255, 0, 0]           # Blue (BGR)
        enabled: true               # false -> only red is NG
-
-
