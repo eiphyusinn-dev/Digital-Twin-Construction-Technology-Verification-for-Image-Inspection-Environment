@@ -4,6 +4,7 @@ import cv2
 import os
 import yaml
 import re
+import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Callable
 from torch.utils.data import Dataset, DataLoader
@@ -12,6 +13,7 @@ from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from utils.preprocessing import FDATransform,HistogramNormalization,BackgroundMasking
 
+logger = logging.getLogger(__name__)
 class ClientCustomDataset(Dataset):
     """
     Supports ImageFolder format with custom preprocessing transforms.
@@ -131,6 +133,11 @@ class ClientCustomDataset(Dataset):
             return (row_norm, col_norm)
         else:
             # Default to center when coordinates not found in filename
+            if self.use_coordconv:
+                logger.warning(
+                    f"CoordConv enabled but no coordinates found in filename: {filename}. "
+                    f"Defaulting to (0.5, 0.5). Expected pattern: '*_r#_c#_*'"
+                )
             return (0.5, 0.5)
 
     def __len__(self) -> int:

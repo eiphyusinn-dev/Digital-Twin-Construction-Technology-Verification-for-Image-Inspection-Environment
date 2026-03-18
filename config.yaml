@@ -1,118 +1,197 @@
 # Custom PyTorch Pipeline Configuration
 
+
 # Dataset Configuration
 dataset:
-  root_dir: "dataset_fda_005"
-  train_dir: "train"
-  val_dir: "val"
-  test_dir: "test"
-  input_size: 224
-  batch_size: 32
-  num_workers: 4
-  
-# Class Configuration
+ root_dir: "patches_dataset/patches_dataset_unmasked"
+ train_dir: "train"
+ val_dir: "val"
+ test_dir: "test"
+ input_size: 224
+ batch_size: 32
+ num_workers: 4
+ # Class Configuration
 classes:
-  names: [] # Use classes.txt
-  num_classes: 2
-  class_weights: [1.0, 1.0]  # Weighted loss for imbalance
+ names: [] # Use classes.txt
+ num_classes: 2
+ class_weights: [1.0, 1.0]  # Weighted loss for imbalance
+
 
 # Model Configuration
 model:
-  name: "convnextv2_large"
-  pretrained: True
-  drop_path_rate: 0.0
-  in_chans: 3
+ name: "convnextv2_large"
+ pretrained: True
+ drop_path_rate: 0.1
+ in_chans: 3
+
 
 # Training Configuration
 training:
-  epochs: 50
-  learning_rate: 1e-4 
-  weight_decay: 1e-4
-  warmup_epochs: 5
-  min_lr: 1e-6
-  resume: True
-  resume_path: "checkpoints/checkpoint_epoch_20.pth"
+ epochs: 50
+ learning_rate: 1e-4 
+ weight_decay: 1e-4
+ warmup_epochs: 5
+ min_lr: 1e-6
+ resume: True
+ resume_path: "checkpoints/checkpoint_epoch_20.pth"
   
   # Preprocessing Features
-  use_bg_masking: true
-  use_fda: false
-  use_hist_norm: false
+ use_bg_masking: true
+ use_fda: true
+ use_hist_norm: true
 
 
-  # Augmentations 
-  augmentation:
-    horizontal_flip: 0.0
-    vertical_flip: 0.0
-    rotation: 0.
-    brightness: 0.0
-    contrast: 0.0
-    saturation: 0.0
-    hue: 0.00
-    
-    # Advanced Augmentations
-    mixup:
-      enabled: false
-      alpha: 0.2
-      beta: 0.2
-    
-    cutmix:
-      enabled: false
-      alpha: 1.0
-    
-    randaugment:
-      enabled: true
-      n: 1
-      m: 5
-    
-    color_jitter:
-      enabled: true
-      brightness: 0.5
-      contrast: 0.1
-      saturation: 0.1
-      hue: 0.05
+
+
+ # Augmentations
+ augmentation:
+   horizontal_flip: 0.0
+   vertical_flip: 0.0
+   rotation: 0.
+   brightness: 0.0
+   contrast: 0.0
+   saturation: 0.0
+   hue: 0.00
   
+   # Advanced Augmentations
+   mixup:
+     enabled: false
+     alpha: 0.2
+     beta: 0.2
   
-  # Training Options
-  freeze_backbone: True
-  use_amp: true
-  gradient_clip: 5.0
+   cutmix:
+     enabled: false
+     alpha: 1.0
   
-# Inference Configuration
+   randaugment:
+     enabled: true
+     n: 1
+     m: 5
+  
+   color_jitter:
+     enabled: true
+     brightness: 0.5
+     contrast: 0.1
+     saturation: 0.1
+     hue: 0.05
+ 
+ # Training Options
+ freeze_backbone: True
+ use_amp: true
+ gradient_clip: 1.0
+ # Inference Configuration
 inference:
-  threshold: 0.7
-  
-# Paths Configuration
+ threshold: 0.7
+ # Paths Configuration
 paths:
-  tao_weights: "pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
-  output_dir: "outputs"
-  log_dir: "logs"
-  checkpoint_dir: "checkpoints"
-  visualization_dir: "visualizations"
+ tao_weights: "../pretrained_models/pretrained_convnextv2_vconvnextv2_large_v1.0/convnextv2_large_trainable_v1.0.pth"
+ output_dir: "outputs"
+ log_dir: "logs"
+ checkpoint_dir: "checkpoints"
+ visualization_dir: "visualizations"
+
 
 # Logging Configuration
 logging:
-  log_interval: 10
-  save_interval: 5
-  eval_interval: 2
+ log_interval: 10
+ save_interval: 5
+ eval_interval: 2
+
 
 #background_masking parameters
 background_masking:
-    cg_mask_json: "mask/cg_mask_label.json"    # For CG images (cg_*.png)
-    real_mask_json: "mask/real_mask_label.json"  # For real images (real_*.png)
+   cg_mask_json: "mask/cg_mask_label.json"    # For CG images (cg_*.png)
+   real_mask_json: "mask/real_mask_label.json"  # For real images (real_*.png)
+
 
 # FDA Parameters
 fda:
-  beta_range: [0.1, 0.4]
-  reference_dir: 'dataset/train/NG/real_1_7000_0.png'
-  filename_filter: 'cg_'  # Only apply FDA to images starting with this prefixzz
-  
-# Hardware Configuration
+ beta_range: [0.1, 0.4]
+ reference_dir: 'dataset/train/NG/real_1_7000_0.png'
+ filename_filter: 'cg_'  # Only apply FDA to images starting with this prefixzz
+ # Hardware Configuration
 hardware:
-  device: "cuda"
-  mixed_precision: true
+ device: "cuda"
+ mixed_precision: true
+
 
 # CoordConv Configuration
 coordconv:
-  enabled: true        # Set to true to enable CoordConv
-  grid_rows: 41           # Total rows in patch grid 
-  grid_cols: 47           # Total columns in patch grid1
+ enabled: true          # Set to true to enable CoordConv
+ grid_rows: 41           # Total rows in patch grid
+ grid_cols: 47           # Total columns in patch grid
+
+
+# Random Patch Extraction Configuration
+random_patch:
+ enabled: true          # Set to true to enable random patch extraction
+ patch_size: 224
+
+
+ # OK settings
+ ok_source_image: "input/cg_image/post_rgb_original.png"
+ min_work_area_ratio: 0.9        # Minimum work area ratio (0.5-0.9)
+
+
+ # NG settings (recursively search multiple folders)
+ ng_source_dirs:                 # Specify multiple directories as a list
+   # - "input/cg_image/_defects.pos4_20260216_postL"
+   # - "input/cg_image/_defects.pos4_20260216_postM"
+   - "input/cg_image/_defects.pos4_20260216_postS"
+   # - "input/cg_image/_defects.pos4_20260219_post"
+   # - "input/cg_image/_defects.pos4_20260220_post1"
+   # - "input/cg_image/_defects.pos4_20260220_post2"
+   # - "input/cg_image/_defects.pos4_20260223_post1"
+   # - "input/cg_image/_defects.pos4_20260223_post2"
+   # - "input/cg_image/_defects.pos4_20260223_post3"
+   # - "input/cg_image/_defects.pos4_20260223_post4"
+   # - "input/cg_image/_defects.pos4_20260224_post1"
+   # - "input/cg_image/_defects.pos4_20260224_post2"
+ rgb_subdir: "post_rgb.png"                          # RGB subdirectory name within each folder
+ seg_subdir: "post_semantic_segmentation.png"        # Semantic seg subdirectory name within each folder
+ patches_per_defect: 10
+ min_defect_overlap: 0.3         # Minimum ratio of defect pixels within patch
+ min_defect_pixels_in_patch: 200 # Minimum defect pixel count in patch
+
+
+ # Train/Val split
+ train_val_split: 0.8            # Train ratio for NG source images (remainder is val)
+ random_seed: 42                 # For split reproducibility
+
+
+ # Ratio
+ ng_ok_ratio: [6, 4]             # NG:OK (adjustment method up to implementer)
+
+
+ # Preprocessing
+ mask_json_path: "mask/cg_mask_label.json"
+ preprocessing:
+   hist_norm:
+     enabled: false
+     mode: "crop_first"          # "crop_first" or "patch_first"
+   fda:
+     enabled: false
+     mode: "crop_first"          # "crop_first" or "patch_first"
+     beta_limit : 0.001
+     reference_path: "input/real_image/13_2_15.png"          # Path to FDA reference image (if enabled)
+
+
+ # Output
+ output_dir: "random_patches_output/test_dataset"
+
+
+# Defect color settings (used for both CG and Real)
+defect_colors:
+ cg:
+   colors:
+     - name: "defect"
+       bgr: [11, 220, 93]        # Actual defect color found in semantic segmentation
+       enabled: true
+ real:
+   colors:
+     - name: "definite_defect"     # Definite defect
+       bgr: [0, 0, 255]           # Red (BGR)
+       enabled: true
+     - name: "uncertain_defect"    # Uncertain defect
+       bgr: [255, 0, 0]           # Blue (BGR)
+       enabled: true               # false -> only red is NG

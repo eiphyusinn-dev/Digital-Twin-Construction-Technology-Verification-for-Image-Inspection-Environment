@@ -5,14 +5,38 @@ import numpy as np
 import glob
 from pathlib import Path
 import sys
-
+import yaml
 # Add parent directory to path to find utils module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import preprocessing modules
 from utils.preprocessing import HistogramNormalization, FDATransform
 
+class DefectColorConfig:
+    def __init__(self, config_path: str = 'config.yaml'):
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+            
+        self.defect_colors_cfg = self.config.get('defect_colors', {})
+        self.is_cg = any(c.get('enabled', False) for c in self.defect_colors_cfg.get('cg', {}).get('colors', []))
 
+    def get_seg_path(self, seg_dir: str, base_name: str) -> str:
+        if self.is_cg:
+            idx = base_name.split('_')[-1]
+            return os.path.join(seg_dir, f"post_semantic_segmentation_{idx}.png")
+        return os.path.join(seg_dir, f"{base_name}_semantic_segmentation.png")
+
+    def get_defect_mask(self, seg_img: np.ndarray) -> np.ndarray:
+        mode = 'cg' if self.is_cg else 'real'
+        color_list = self.defect_colors_cfg.get(mode, {}).get('colors', [])
+        full_mask = np.zeros(seg_img.shape[:2], dtype=np.uint8)
+        for color_cfg in color_list:
+            if color_cfg.get('enabled', True):
+                bgr = np.array(color_cfg.get('bgr'), dtype=np.uint8)
+                mask = cv2.inRange(seg_img, bgr, bgr)
+                full_mask = cv2.bitwise_or(full_mask, mask)
+        return full_mask
+    
 class BackgroundMasking:
     def __init__(self, json_path: str = None, original_size: tuple = None):
         self.json_path = Path(json_path)
@@ -130,7 +154,8 @@ class CompletePatchProcessor:
     def process_single_image(self, 
                            img_path: str, 
                            seg_path: str, 
-                           mask_json_path: str) -> dict:
+                           mask_json_path: str,
+                           defect_config: DefectColorConfig) -> dict:
         """Process a single image through the complete pipeline."""
         
         base_name = Path(img_path).stem
@@ -161,18 +186,31 @@ class CompletePatchProcessor:
         img_masked = cv2.bitwise_and(processed_img, processed_img, mask=full_mask)
         
         # Step 3: Load and isolate Defect Mask
-        idx = base_name.split('_')[-1]
-        seg_full_path = os.path.join(seg_path, f"instance_segmentation_{idx}.png")
+        seg_full_path = defect_config.get_seg_path(seg_path, base_name)
         
         defect_mask = None
         if os.path.exists(seg_full_path):
             seg_map = cv2.imread(seg_full_path)
-            DEFECT_BGR = np.array([61, 61, 204])
-            defect_mask = cv2.inRange(seg_map, DEFECT_BGR, DEFECT_BGR)
-            # Only keep defect pixels that are within the valid background mask
-            defect_mask = cv2.bitwise_and(defect_mask, defect_mask, mask=full_mask)
+            defect_mask = defect_config.get_defect_mask(seg_map)
+            if self.use_bg_mask:
+                defect_mask = cv2.bitwise_and(defect_mask, defect_mask, mask=full_mask)
         else:
-            print(f"Warning: Seg map not found at {seg_full_path}")
+            print(f"Warning: Seg map not found: {seg_full_path}")
+        # idx = base_name.split('_')[-1]
+        # seg_full_path = os.path.join(seg_path, f"{base_name}_semantic_segmentation.png")
+        # # seg_full_path = os.path.join(seg_path, f"post_semantic_segmentation_{idx}.png")
+        
+        # defect_mask = None
+        # if os.path.exists(seg_full_path):
+        #     seg_map = cv2.imread(seg_full_path)
+        #     DEFECT_BGR = np.array([0, 0, 255]) #new real seg color - red
+        #     # DEFECT_BGR = np.array([11, 220, 93]) #new cg seg color - green
+        #     # DEFECT_BGR = np.array([61, 61, 204]) #old intance seg color
+        #     defect_mask = cv2.inRange(seg_map, DEFECT_BGR, DEFECT_BGR)
+        #     # Only keep defect pixels that are within the valid background mask
+        #     defect_mask = cv2.bitwise_and(defect_mask, defect_mask, mask=full_mask)
+        # else:
+        #     print(f"Warning: Seg map not found at {seg_full_path}")
         
         # Step 4: Split into patches and apply FDA
         patches_info = []
@@ -253,6 +291,7 @@ def run_complete_patch_pipeline(img_dir: str,
                               seg_dir: str, 
                               mask_json_path: str,
                               output_root: str,
+                              defect_config: DefectColorConfig,
                               real_reference_dir: str = None,
                               patch_size: int = 224,
                               stride: int = 112,
@@ -297,7 +336,8 @@ def run_complete_patch_pipeline(img_dir: str,
         processed_data = processor.process_single_image(
             img_path=img_path,
             seg_path=seg_dir,
-            mask_json_path=mask_json_path
+            mask_json_path=mask_json_path,
+            defect_config=defect_config
         )
         
         if 'error' in processed_data:
@@ -327,11 +367,13 @@ def run_complete_patch_pipeline(img_dir: str,
 
 
 if __name__ == "__main__":
+    defect_cfg = DefectColorConfig('config.yaml')
     run_complete_patch_pipeline(
-        img_dir="sample_data/02_omniverse/_defects.pos4/rgb",
-        seg_dir="sample_data/02_omniverse/_defects.pos4/instance_segmentation", 
-        mask_json_path="/home/gwm-279/Desktop/tao_experiments/custom_pytorch_pipeline/mask/cg_mask_label.json",
-        output_root="patches_dataset/patches_dataset_bgmask_histnorm_fda",
+        img_dir="20260302_kizu/test_kizu",
+        seg_dir="20260302_kizu/test_seg_mask", 
+        mask_json_path="mask/cg_mask_label.json",
+        output_root="patches_dataset/scratch_test_blue",
+        defect_config=defect_cfg,
         real_reference_dir="real_image_cropped/5_7000_25.png", 
         patch_size=224,
         stride=112,
