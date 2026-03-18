@@ -219,7 +219,11 @@ class RandomPatchExtractor:
         bg_mask = None
         if self.bg_masking:
             bg_mask = self.bg_masking.get_mask(h, w)
-        
+
+        # STEP 0: Apply background mask BEFORE cropping (turn background to black)
+        if bg_mask is not None:
+            processed_image = cv2.bitwise_and(processed_image, processed_image, mask=bg_mask)
+
         # STEP 1: Crop to product area (remove black background)
         if bg_mask is not None:
             # Find bounding box of product area
@@ -352,7 +356,10 @@ class RandomPatchExtractor:
             image_rgb, bg_mask = self._apply_preprocessing_crop_first(image_rgb, "ok_source")
         else:
             bg_mask = self.bg_masking.get_mask(h, w) if self.bg_masking else None
-        
+            # Apply background mask (turn background to black)
+            if bg_mask is not None:
+                image_rgb = cv2.bitwise_and(image_rgb, image_rgb, mask=bg_mask)
+
         min_work_area_ratio = self.config.get('min_work_area_ratio', 0.9)
         max_attempts = target_count * 20  # Prevent infinite loops
         
@@ -471,7 +478,11 @@ class RandomPatchExtractor:
         else:
             if self.bg_masking:
                 bg_mask = self.bg_masking.get_mask(h, w)
-        
+                # Apply background mask (turn background to black)
+                image_rgb = cv2.bitwise_and(image_rgb, image_rgb, mask=bg_mask)
+                # Update defect mask to only include pixels within background mask
+                defect_mask = cv2.bitwise_and(defect_mask, defect_mask, mask=bg_mask)
+
         # Generate patches
         patch_start = time.time()
         patches_per_defect = self.config.get('patches_per_defect', 10)
@@ -506,7 +517,13 @@ class RandomPatchExtractor:
             if coord_key in used_coords:
                 continue
             used_coords.add(coord_key)
-            
+
+            # Check work area ratio (ensure patch is mostly within product area)
+            if bg_mask is not None:
+                work_area_ratio = self._calculate_work_area_ratio(bg_mask, patch_x, patch_y)
+                if work_area_ratio < self.config.get('min_work_area_ratio', 0.9):
+                    continue
+
             # Count defect pixels in patch
             patch_defect_mask = defect_mask[patch_y:patch_y+self.patch_size, 
                                            patch_x:patch_x+self.patch_size]
