@@ -71,7 +71,7 @@ class InferenceEngine:
 
         # HistNorm instance for whole_image / crop_first modes
         if self.use_hist_norm and self.hist_norm_mode != 'patch_first':
-            self.hist_normalizer = HistogramNormalization(p=1.0)
+            self.hist_normalizer = HistogramNormalization(always_apply=True, p=1.0)
 
         self.class_names = model_config.get('class_names', ['NG', 'OK'])
 
