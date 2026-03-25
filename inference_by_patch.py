@@ -16,7 +16,7 @@ from tqdm import tqdm
 # Import custom modules
 from model import create_model, ConvNeXtV2
 from dataset import create_validation_transforms
-from utils.preprocessing import BackgroundMasking
+from utils.preprocessing import BackgroundMasking, HistogramNormalization
 
 class InferenceEngine:
     def __init__(self, 
@@ -56,15 +56,27 @@ class InferenceEngine:
         if self.use_bg_masking:
             self._initialize_background_masks()
         
-        # Standard transforms (same as original)
+        # HistNorm mode setup
+        self.use_hist_norm = full_config.get('training', {}).get('use_hist_norm', False)
+        self.hist_norm_mode = full_config.get('random_patch', {}).get('preprocessing', {}).get('hist_norm', {}).get('mode', 'patch_first')
+
+        # patch_first: HistNorm is applied per-patch inside transform (existing behavior)
+        # whole_image / crop_first: HistNorm is applied before patch splitting in predict_full_image
+        use_hist_in_transform = self.use_hist_norm and self.hist_norm_mode == 'patch_first'
         temp_config = {
-            'training': {'use_hist_norm': model_config.get('use_hist_norm', False)},
+            'training': {'use_hist_norm': use_hist_in_transform},
             'dataset': {'input_size': patch_size}
         }
         self.transform = create_validation_transforms(temp_config)
+
+        # HistNorm instance for whole_image / crop_first modes
+        if self.use_hist_norm and self.hist_norm_mode != 'patch_first':
+            self.hist_normalizer = HistogramNormalization(p=1.0)
+
         self.class_names = model_config.get('class_names', ['NG', 'OK'])
-        
+
         print(f"Background masking: {'Enabled' if self.use_bg_masking else 'Disabled'}")
+        print(f"HistNorm: {'Enabled' if self.use_hist_norm else 'Disabled'}" + (f" (mode: {self.hist_norm_mode})" if self.use_hist_norm else ""))
         print(f"Class names: {self.class_names}")
     
     def _initialize_background_masks(self):
@@ -96,6 +108,27 @@ class InferenceEngine:
         except Exception as e:
             print(f"Masking error for {filename}: {e}")
         return image
+
+    def _apply_hist_crop_first(self, masked_rgb: np.ndarray) -> np.ndarray:
+        """Crop to work area -> apply HistNorm -> paste back to original size.
+
+        Matches the training-time crop_first preprocessing order:
+        BG mask -> crop to bbox -> HistNorm -> restore to black background -> patch split
+        """
+        gray = cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2GRAY)
+        coords = cv2.findNonZero(gray)
+        if coords is None:
+            return masked_rgb
+
+        x, y, bw, bh = cv2.boundingRect(coords)
+
+        # Crop work area, apply HistNorm, paste back
+        crop = masked_rgb[y:y+bh, x:x+bw].copy()
+        crop_hist = self.hist_normalizer(image=crop)['image']
+
+        result = masked_rgb.copy()
+        result[y:y+bh, x:x+bw] = crop_hist
+        return result
 
     def _load_model(self, model_path: str) -> ConvNeXtV2:
         model = create_model(
@@ -158,12 +191,23 @@ class InferenceEngine:
         
         img_rgb = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2RGB)
         h, w = img_rgb.shape[:2]
-        
+
+        # 0. HistNorm (whole_image): apply to entire image BEFORE background masking
+        if self.use_hist_norm and self.hist_norm_mode == 'whole_image':
+            img_rgb = self.hist_normalizer(image=img_rgb)['image']
+            print(f"  Applied HistNorm (whole_image mode)")
+
         # 1. Apply background masking if enabled
         if self.use_bg_masking:
             masked_rgb = self._apply_background_masking(img_rgb.copy(), filename)
             if save_preview:
                 self._save_mask_preview(img_rgb, masked_rgb, filename)
+
+            # 1.5. HistNorm (crop_first): crop to work area -> HistNorm -> paste back
+            if self.use_hist_norm and self.hist_norm_mode == 'crop_first':
+                masked_rgb = self._apply_hist_crop_first(masked_rgb)
+                print(f"  Applied HistNorm (crop_first mode)")
+
             patches = self.get_patches(masked_rgb)
         else:
             patches = self.get_patches(img_rgb)
